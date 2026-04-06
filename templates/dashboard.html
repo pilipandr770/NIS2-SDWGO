@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Dashboard</h1>
+    <div class="sub">NIS2 / DSGVO Audit Platform — AndriiIT</div>
+  </div>
+  <a href="{{ url_for('new_angebot') }}" class="btn btn-primary">+ Neues Angebot</a>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-num">{{ stats.clients }}</div>
+    <div class="stat-label">Kunden</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-num">{{ stats.orders }}</div>
+    <div class="stat-label">Aufträge gesamt</div>
+  </div>
+  <div class="stat-card warn">
+    <div class="stat-num">{{ stats.open }}</div>
+    <div class="stat-label">Offen / Aktiv</div>
+  </div>
+  <div class="stat-card success">
+    <div class="stat-num">{{ stats.done }}</div>
+    <div class="stat-label">Abgeschlossen</div>
+  </div>
+</div>
+
+<div class="two-col">
+
+<div>
+<div class="panel">
+  <div class="panel-header">
+    <h3>Letzte Aufträge</h3>
+    <a href="{{ url_for('orders') }}" style="font-size:12px;color:var(--accent2)">Alle →</a>
+  </div>
+  {% if orders %}
+  <div class="card-list">
+    {% for o in orders[:10] %}
+    <a href="{{ url_for('order_detail', oid=o.id) }}" class="card-item">
+      <div>
+        <div class="card-title">{{ o.company }}</div>
+        <div class="card-sub">{{ o.target }} · {{ o.angebot_num or '#' + o.id|string }}</div>
+      </div>
+      <div class="card-right">
+        <span class="badge badge-{{ o.status }}">{{ o.status }}</span>
+        <span class="card-date">{{ o.created_at[:10] }}</span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">Noch keine Aufträge — <a href="{{ url_for('new_angebot') }}">Angebot erstellen</a></div>
+  {% endif %}
+</div>
+</div>
+
+<div>
+<div class="panel">
+  <div class="panel-header">
+    <h3>Kunden</h3>
+    <a href="{{ url_for('clients') }}" style="font-size:12px;color:var(--accent2)">Alle →</a>
+  </div>
+  {% if clients %}
+  <div class="card-list">
+    {% for c in clients[:8] %}
+    <a href="{{ url_for('client_detail', cid=c.id) }}" class="card-item">
+      <div>
+        <div class="card-title">{{ c.company }}</div>
+        <div class="card-sub">{{ c.email }}</div>
+      </div>
+      <div class="card-right">
+        <span class="card-date">{{ c.created_at[:10] }}</span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">Noch keine Kunden — <a href="{{ url_for('new_client') }}">Kunden anlegen</a></div>
+  {% endif %}
+</div>
+
+<div class="panel" style="margin-top:0">
+  <h3>Schnellzugriff</h3>
+  <div style="display:flex;flex-direction:column;gap:8px">
+    <a href="{{ url_for('new_client') }}" class="btn btn-secondary btn-block">+ Neuen Kunden anlegen</a>
+    <a href="{{ url_for('new_angebot') }}" class="btn btn-primary btn-block">+ Angebot erstellen</a>
+  </div>
+</div>
+</div>
+
+</div>
+{% endblock %}

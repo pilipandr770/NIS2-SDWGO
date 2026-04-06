@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}NIS2Audit{% endblock %} — AndriiIT</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% if logged_in %}
+<nav class="navbar">
+  <div style="display:flex;align-items:center;gap:8px">
+    <span class="brand-logo">AndriiIT</span>
+    <span class="brand-sub">NIS2 Audit</span>
+  </div>
+  <div class="nav-links">
+    <a href="{{ url_for('dashboard') }}" {% if request.endpoint=='dashboard' %}class="active"{% endif %}>Dashboard</a>
+    <a href="{{ url_for('clients') }}"   {% if request.endpoint in ['clients','new_client','client_detail','edit_client'] %}class="active"{% endif %}>Kunden</a>
+    <a href="{{ url_for('orders') }}"    {% if request.endpoint in ['orders','order_detail'] %}class="active"{% endif %}>Aufträge</a>
+    <a href="{{ url_for('new_angebot') }}" class="btn btn-nav">+ Angebot</a>
+    <a href="{{ url_for('logout') }}" class="nav-logout">Abmelden</a>
+  </div>
+</nav>
+{% endif %}
+
+<div class="container">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  {% for category, message in messages %}
+  <div class="alert alert-{{ category }}">{{ message }}</div>
+  {% endfor %}
+  {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

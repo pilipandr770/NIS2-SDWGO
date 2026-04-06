@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{% if client %}{{ client.company }} bearbeiten{% else %}Neuer Kunde{% endif %}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{% if client %}Kunde bearbeiten{% else %}Neuer Kunde{% endif %}</h1>
+  </div>
+  <a href="{{ url_for('clients') }}" class="btn btn-secondary">← Zurück</a>
+</div>
+
+<div class="panel" style="max-width:640px">
+  <form method="post">
+    <div class="two-col">
+      <div class="form-row">
+        <label>Firma *</label>
+        <input type="text" name="company" class="input-full" value="{{ client.company if client else '' }}" required>
+      </div>
+      <div class="form-row">
+        <label>Ansprechpartner</label>
+        <input type="text" name="contact" class="input-full" value="{{ client.contact if client else '' }}">
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="form-row">
+        <label>E-Mail *</label>
+        <input type="email" name="email" class="input-full" value="{{ client.email if client else '' }}" required>
+      </div>
+      <div class="form-row">
+        <label>Telefon</label>
+        <input type="tel" name="phone" class="input-full" value="{{ client.phone if client else '' }}">
+      </div>
+    </div>
+    <div class="form-row">
+      <label>Adresse</label>
+      <input type="text" name="address" class="input-full" value="{{ client.address if client else '' }}" placeholder="Straße, PLZ Stadt">
+    </div>
+    <div class="form-row">
+      <label>USt-ID</label>
+      <input type="text" name="ustid" class="input-full" value="{{ client.ustid if client else '' }}" placeholder="DE123456789">
+    </div>
+    <div class="form-row">
+      <label>Notizen</label>
+      <textarea name="notes" class="input-full" rows="3" style="resize:vertical">{{ client.notes if client else '' }}</textarea>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{% if client %}Speichern{% else %}Kunde anlegen{% endif %}</button>
+      <a href="{{ url_for('clients') }}" class="btn btn-secondary">Abbrechen</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

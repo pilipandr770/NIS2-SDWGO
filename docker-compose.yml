@@ -1,0 +1,20 @@
+services:
+  nis2audit:
+    build: .
+    image: nis2audit:latest
+    ports:
+      - "5000:5000"
+    environment:
+      - SECRET_KEY=change-me-strong-secret-key-32chars
+      - ADMIN_EMAIL=admin@andrii-it.de
+      - ADMIN_PASSWORD=andrii-it-2026
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DB_PATH=/data/nis2audit.db
+    volumes:
+      - nis2audit_data:/data
+      - nis2audit_reports:/app/reports
+    restart: unless-stopped
+
+volumes:
+  nis2audit_data:
+  nis2audit_reports:

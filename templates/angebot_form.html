@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Angebot erstellen{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Neues Angebot</h1>
+    <div class="sub">NIS2 / DSGVO Compliance-Prüfung anbieten</div>
+  </div>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">← Zurück</a>
+</div>
+
+{% if not clients %}
+<div class="alert alert-error">
+  Bitte zuerst einen <a href="{{ url_for('new_client') }}" style="color:var(--accent2)">Kunden anlegen</a>.
+</div>
+{% else %}
+<div class="panel" style="max-width:700px">
+  <form method="post">
+    <div class="form-row">
+      <label>Kunde *</label>
+      <select name="client_id" class="input-full" required>
+        <option value="">— Kunden wählen —</option>
+        {% for c in clients %}
+        <option value="{{ c.id }}">{{ c.company }} ({{ c.email }})</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="form-row">
+      <label>Prüfungsziel (URL) *</label>
+      <input type="url" name="target" class="input-full" placeholder="https://example.de"
+             required pattern="https?://.+" title="Bitte vollständige URL mit https:// eingeben">
+      <div style="font-size:11px;color:var(--text2);margin-top:4px">
+        Die Website / Webanwendung, die geprüft werden soll. Muss schriftlich autorisiert sein (§202a StGB).
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="form-row">
+        <label>Auftragssumme (EUR)</label>
+        <input type="text" name="amount" class="input-full" value="1500" placeholder="1500">
+      </div>
+      <div class="form-row">
+        <label>Laufzeit / Liefertermin</label>
+        <input type="text" name="scope" class="input-full" placeholder="7–14 Werktage">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label>Leistungsumfang / Besonderheiten</label>
+      <textarea name="scope" class="input-full" rows="3" style="resize:vertical"
+                placeholder="z.B. Black-Box Pentest, Subdomain-Scan, DSGVO-Analyse..."></textarea>
+    </div>
+
+    <div class="form-row">
+      <label>Interne Notizen</label>
+      <textarea name="notes" class="input-full" rows="2" style="resize:vertical"></textarea>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">📄 Angebot erstellen</button>
+      <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Abbrechen</a>
+    </div>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

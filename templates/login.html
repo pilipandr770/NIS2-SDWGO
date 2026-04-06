@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — Andrii-IT NIS2Audit</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="login-page">
+  <div class="login-box">
+    <div class="login-logo">Andrii-IT</div>
+    <div class="login-sub">NIS2 / DSGVO Audit Platform</div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <form method="post" class="login-form">
+      <div class="form-row">
+        <label>E-Mail</label>
+        <input type="email" name="email" class="input-full" placeholder="admin@andrii-it.de" required autofocus>
+      </div>
+      <div class="form-row">
+        <label>Passwort</label>
+        <input type="password" name="password" class="input-full" placeholder="••••••••" required>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:8px">
+        Anmelden
+      </button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,425 @@
+{% extends "base.html" %}
+{% block title %}Auftrag #{{ order.id }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ order.company }}</h1>
+    <div class="sub">{{ order.target }} &nbsp;·&nbsp; Auftrag #{{ order.id }} &nbsp;·&nbsp; {{ order.angebot_num or '' }}</div>
+  </div>
+  <div class="header-actions">
+    <span class="badge badge-{{ order.status }} badge-lg">{{ order.status }}</span>
+    {% if order.angebot_pdf %}
+    <a href="{{ url_for('download', filename=order.angebot_pdf) }}" class="btn btn-secondary" target="_blank">⬇ Angebot PDF</a>
+    {% endif %}
+    {% if order.report_pdf %}
+    <a href="{{ url_for('download', filename=order.report_pdf) }}" class="btn btn-success" target="_blank">⬇ Bericht PDF</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="two-col-70">
+
+<!-- Linke Spalte -->
+<div>
+
+<!-- Auftragsdaten -->
+<div class="panel">
+  <h3>Auftragsdaten</h3>
+  <table class="info-table">
+    <tr><td>Kunde</td><td><b>{{ order.company }}</b></td></tr>
+    <tr><td>Kontakt</td><td>{{ order.contact or '—' }}</td></tr>
+    <tr><td>E-Mail</td><td>{{ order.email }}</td></tr>
+    <tr><td>Adresse</td><td>{{ order.address or '—' }}</td></tr>
+    <tr><td>USt-ID</td><td>{{ order.ustid or '—' }}</td></tr>
+    <tr><td>Prüfungsziel</td><td><a href="{{ order.target }}" target="_blank" rel="noopener noreferrer">{{ order.target }}</a></td></tr>
+    <tr><td>Auftragssumme</td><td><b>{{ order.amount }} EUR</b></td></tr>
+    <tr><td>Erstellt</td><td>{{ order.created_at[:16] }}</td></tr>
+    <tr><td>Aktualisiert</td><td>{{ order.updated_at[:16] }}</td></tr>
+    {% if order.scope %}<tr><td>Scope</td><td style="font-size:12px">{{ order.scope }}</td></tr>{% endif %}
+    {% if order.notes %}<tr><td>Notizen</td><td style="font-size:12px;color:var(--text2)">{{ order.notes }}</td></tr>{% endif %}
+  </table>
+</div>
+
+<!-- Aktionen -->
+<div class="panel">
+  <h3>Aktionen</h3>
+  <div class="action-grid">
+    {% if order.status in ['angebot','active','done'] %}
+    <form method="post" action="{{ url_for('start_audit', oid=order.id) }}">
+      <button class="btn btn-primary btn-block" onclick="return confirm('KI-Audit starten? Der Agent führt automatisierte Sicherheitsprüfungen durch.')">
+        ▶ KI-Audit starten (automatisch)
+      </button>
+    </form>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('generate_report', oid=order.id) }}">
+      <button class="btn btn-success btn-block">📄 Compliance-Bericht generieren</button>
+    </form>
+
+    <button class="btn btn-secondary btn-block" onclick="runLiveCheck()">🔍 Live Header &amp; TLS Check</button>
+    <div id="live-result" class="live-result" style="display:none"></div>
+
+    <div class="status-form" style="margin-top:8px">
+      <form method="post" action="{{ url_for('update_status', oid=order.id) }}" class="inline-form">
+        <select name="status" class="select-sm">
+          <option value="angebot"   {% if order.status=='angebot'   %}selected{% endif %}>Angebot</option>
+          <option value="active"    {% if order.status=='active'    %}selected{% endif %}>Aktiv</option>
+          <option value="running"   {% if order.status=='running'   %}selected{% endif %}>Läuft</option>
+          <option value="done"      {% if order.status=='done'      %}selected{% endif %}>Fertig</option>
+          <option value="completed" {% if order.status=='completed' %}selected{% endif %}>Abgeschlossen</option>
+          <option value="cancelled" {% if order.status=='cancelled' %}selected{% endif %}>Abgebrochen</option>
+        </select>
+        <button class="btn btn-secondary">Status setzen</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- NIS2 / DSGVO Aufgaben-Checkliste -->
+{% if tasks %}
+{% set done_count = tasks | selectattr('done', 'equalto', 1) | list | length %}
+{% set total_count = tasks | length %}
+{% set pct = (done_count / total_count * 100) | int if total_count > 0 else 0 %}
+<div class="panel">
+  <div class="panel-header">
+    <h3>NIS2 / DSGVO Compliance-Checkliste</h3>
+    <span id="task-progress-label" class="task-progress-label">{{ done_count }}/{{ total_count }} ({{ pct }}%)</span>
+  </div>
+
+  <!-- Fortschrittsbalken -->
+  <div class="progress-bar-wrap">
+    <div class="progress-bar-fill progress-warn"
+         id="task-progress-bar" data-pct="{{ pct }}"></div>
+  </div>
+
+  {% set categories = tasks | map(attribute='category') | unique | list %}
+  {% for cat in categories %}
+  {% set cat_tasks = tasks | selectattr('category', 'equalto', cat) | list %}
+  <div class="task-category">
+    <div class="task-cat-header">{{ cat }}</div>
+    <table class="task-table">
+      <tbody>
+      {% for t in cat_tasks %}
+      <tr class="task-row {% if t.done %}task-done{% endif %}" id="task-row-{{ t.id }}">
+        <td class="task-check-cell">
+          <input type="checkbox" class="task-check" id="tc-{{ t.id }}"
+                 {% if t.done %}checked{% endif %}
+                 data-tid="{{ t.id }}">
+        </td>
+        <td class="task-title-cell">
+          <label for="tc-{{ t.id }}" class="task-title">
+            {{ t.title }}
+            {% if t.required %}<span class="task-req">Pflicht</span>{% endif %}
+          </label>
+          <div class="task-desc">{{ t.description }}</div>
+          <div class="task-refs">
+            {% if t.nis2_ref %}<span class="task-ref-badge nis2-badge">{{ t.nis2_ref }}</span>{% endif %}
+            {% if t.dsgvo_ref %}<span class="task-ref-badge dsgvo-badge">{{ t.dsgvo_ref }}</span>{% endif %}
+          </div>
+          {% if t.done_at %}
+          <div class="task-done-at">✓ Erledigt: {{ t.done_at[:16] }}</div>
+          {% endif %}
+          {% if t.notes %}
+          <div class="task-notes-display" id="notes-display-{{ t.id }}">📝 {{ t.notes }}</div>
+          {% endif %}
+          <div class="task-notes-edit" id="notes-edit-{{ t.id }}" style="display:none">
+            <textarea class="textarea-sm" id="notes-val-{{ t.id }}" rows="2" placeholder="Anmerkungen…">{{ t.notes or '' }}</textarea>
+            <button class="btn btn-secondary btn-sm" data-tid="{{ t.id }}" data-action="save-notes">Speichern</button>
+            <button class="btn-sm-inv" data-tid="{{ t.id }}" data-action="hide-notes">Abbrechen</button>
+          </div>
+        </td>
+        <td class="task-actions-cell">
+          <button class="btn-icon" title="Anmerkung" data-tid="{{ t.id }}" data-action="show-notes">✏</button>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Befunde -->
+<div class="panel">
+  <div class="panel-header">
+    <h3>Sicherheitsbefunde ({{ findings|length }})</h3>
+    {% if findings %}
+    <div class="findings-summary">
+      {% for sev, col in [('critical','#dc2626'),('high','#e67e22'),('medium','#d4a017'),('low','#16a34a')] %}
+      {% set cnt = findings | selectattr('severity','equalto',sev) | list | length %}
+      {% if cnt %}<span class="badge badge-{{ sev }}">{{ cnt }} {{ sev }}</span>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  {% if findings %}
+  <table class="data-table">
+    <thead><tr><th>#</th><th>Titel</th><th>Schweregrad</th><th>CVSS</th><th>DSGVO / NIS2</th><th></th></tr></thead>
+    <tbody>
+    {% for f in findings %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>
+        <div style="font-weight:600">{{ f.title }}</div>
+        {% if f.description %}<div style="font-size:11px;color:var(--text2);margin-top:2px">{{ f.description[:100] }}{% if f.description|length > 100 %}…{% endif %}</div>{% endif %}
+      </td>
+      <td><span class="badge badge-{{ f.severity }}">{{ f.severity|upper }}</span></td>
+      <td>{{ f.cvss or '—' }}</td>
+      <td style="font-size:11px">{{ f.dsgvo_article or '—' }}</td>
+      <td><button class="btn-icon" data-fid="{{ f.id }}" data-action="delete-finding" title="Löschen">✕</button></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">Noch keine Befunde — KI-Audit starten oder manuell erfassen</div>
+  {% endif %}
+
+  <details style="margin-top:14px">
+    <summary class="details-toggle">+ Befund manuell hinzufügen</summary>
+    <div class="finding-form">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="text" id="f-title" placeholder="Titel des Befunds *" class="input-sm" style="flex:2;min-width:200px">
+        <select id="f-severity" class="select-sm">
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium" selected>Medium</option>
+          <option value="low">Low</option>
+          <option value="info">Info</option>
+        </select>
+        <input type="text" id="f-cvss" placeholder="CVSS z.B. 7.5" class="input-sm" style="width:110px">
+        <input type="text" id="f-dsgvo" placeholder="Art. 32 DSGVO" class="input-sm" style="width:160px">
+      </div>
+      <textarea id="f-desc" placeholder="Beschreibung des Problems" class="textarea-sm" rows="2"></textarea>
+      <textarea id="f-rec" placeholder="Empfehlung zur Behebung" class="textarea-sm" rows="2"></textarea>
+      <button class="btn btn-primary" onclick="addFinding()">Befund speichern</button>
+    </div>
+  </details>
+</div>
+
+</div><!-- Ende linke Spalte -->
+
+<!-- Rechte Spalte: Audit-Log -->
+<div>
+<div class="panel panel-dark">
+  <div class="panel-header">
+    <h3>Audit-Log</h3>
+    <button class="btn-sm-inv" onclick="clearLogs()">Clear</button>
+  </div>
+  <div id="audit-log" class="audit-log">
+    {% for l in logs | reverse %}
+    <div class="log-line log-{{ l.level|lower }}">
+      <span class="log-time">{{ l.created_at[11:19] }}</span>
+      <span class="log-level">{{ l.level }}</span>
+      <span class="log-msg">{{ l.message }}</span>
+    </div>
+    {% else %}
+    <div class="log-line log-info"><span class="log-msg">Bereit. KI-Audit starten oder Checkliste manuell abarbeiten.</span></div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Kurzinfo Regulatorik -->
+<div class="panel" style="margin-top:0">
+  <h3>Regulatorische Grundlagen</h3>
+  <div style="font-size:11px;line-height:1.9;color:var(--text2)">
+    <div><b style="color:var(--text)">NIS2 / §30 BSIG</b><br>Mindestmaßnahmen für KRITIS und wichtige Einrichtungen. Umsetzung bis 17.10.2024.</div>
+    <div style="margin-top:8px"><b style="color:var(--text)">DSGVO Art. 32</b><br>Technische &amp; organisatorische Maßnahmen (TOM) zum Schutz personenbezogener Daten.</div>
+    <div style="margin-top:8px"><b style="color:var(--text)">Meldepflicht §32 BSIG</b><br>Erhebliche Vorfälle: 24h → Erstmeldung, 72h → Detailmeldung, 1 Monat → Abschlussbericht.</div>
+    <div style="margin-top:8px"><b style="color:var(--text)">Bußgelder NIS2</b><br>KRITIS: bis 10 Mio. EUR / 2% Umsatz. Wichtige Einrichtungen: bis 7 Mio. EUR.</div>
+  </div>
+</div>
+</div><!-- Ende rechte Spalte -->
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<input type="hidden" id="_oid" value="{{ order.id }}">
+<input type="hidden" id="_otgt" value="{{ order.target }}">
+<input type="hidden" id="_lid" value="{{ (logs | sort(attribute='id') | last).id if logs else 0 }}">
+<script>
+const ORDER_ID = parseInt(document.getElementById('_oid').value);
+const ORDER_TARGET = document.getElementById('_otgt').value;
+let lastLogId = parseInt(document.getElementById('_lid').value);
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Findings ─────────────────────────────────────────────────────────────────
+function addFinding() {
+  const title = document.getElementById('f-title').value.trim();
+  if (!title) { alert('Titel ist erforderlich'); return; }
+  const data = {
+    title:        title,
+    severity:     document.getElementById('f-severity').value,
+    cvss:         document.getElementById('f-cvss').value.trim(),
+    dsgvo_article: document.getElementById('f-dsgvo').value.trim(),
+    description:  document.getElementById('f-desc').value.trim(),
+    recommendation: document.getElementById('f-rec').value.trim(),
+    target:       ORDER_TARGET
+  };
+  fetch('/api/findings/' + ORDER_ID, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  }).then(() => location.reload());
+}
+
+function deleteFinding(fid) {
+  if (!confirm('Befund löschen?')) return;
+  fetch('/api/findings/' + fid, { method: 'DELETE' }).then(() => location.reload());
+}
+
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+function toggleTask(tid, el) {
+  fetch('/api/tasks/' + tid + '/toggle', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      const row = document.getElementById('task-row-' + tid);
+      if (data.done) {
+        el.checked = true;
+        row.classList.add('task-done');
+      } else {
+        el.checked = false;
+        row.classList.remove('task-done');
+      }
+      updateTaskProgress();
+    });
+}
+
+function updateTaskProgress() {
+  const checks = document.querySelectorAll('.task-check');
+  const done   = document.querySelectorAll('.task-check:checked');
+  const total  = checks.length;
+  const pct    = total > 0 ? Math.round(done.length / total * 100) : 0;
+  const bar    = document.getElementById('task-progress-bar');
+  const label  = document.getElementById('task-progress-label');
+  if (bar) {
+    bar.style.width = pct + '%';
+    bar.className = 'progress-bar-fill ' + (pct === 100 ? 'progress-done' : pct >= 60 ? 'progress-ok' : 'progress-warn');
+  }
+  if (label) label.textContent = done.length + '/' + total + ' (' + pct + '%)';
+}
+
+function showNotes(tid) {
+  document.getElementById('notes-edit-' + tid).style.display = 'block';
+  document.getElementById('notes-val-' + tid).focus();
+}
+function hideNotes(tid) {
+  document.getElementById('notes-edit-' + tid).style.display = 'none';
+}
+function saveTaskNotes(tid) {
+  const notes = document.getElementById('notes-val-' + tid).value;
+  fetch('/api/tasks/' + tid + '/notes', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ notes: notes })
+  }).then(() => location.reload());
+}
+
+// ── Live Check ────────────────────────────────────────────────────────────────
+function runLiveCheck() {
+  const div = document.getElementById('live-result');
+  div.style.display = 'block';
+  div.innerHTML = '<span style="color:var(--text2)">⏳ Prüfe Headers und TLS…</span>';
+  fetch('/api/live-check?target=' + encodeURIComponent(ORDER_TARGET))
+    .then(r => r.json())
+    .then(data => {
+      let html = '<div class="lc-title">Live-Check: ' + escHtml(ORDER_TARGET) + '</div>';
+      if (data.fetch_error) {
+        html += '<div class="lc-warn">⚠ ' + escHtml(data.fetch_error) + '</div>';
+      } else {
+        const tg = data.tls_grade || '';
+        const tc = tg === 'A' ? 'lc-ok' : 'lc-fail';
+        html += '<div class="lc-row">TLS: <b class="' + tc + '">' + escHtml(tg) + '</b> · ' + escHtml(data.tls_version || '') + ' · ' + escHtml(data.tls_issuer || '') + '</div>';
+        (data.headers || []).forEach(h => {
+          const cls = h.good ? 'lc-ok' : 'lc-fail';
+          html += '<div class="lc-row"><span class="' + cls + '">' + (h.good ? '✓' : '✗') + '</span> '
+                + escHtml(h.name)
+                + (h.value ? ' <span style="color:var(--text3);font-size:10px">(' + escHtml(h.value.slice(0,50)) + ')</span>' : '')
+                + '</div>';
+        });
+      }
+      div.innerHTML = html;
+    })
+    .catch(e => {
+      div.innerHTML = '<div class="lc-warn">Fehler: ' + escHtml(e.message) + '</div>';
+    });
+}
+
+// ── Audit Log ─────────────────────────────────────────────────────────────────
+function clearLogs() {
+  document.getElementById('audit-log').innerHTML =
+    '<div class="log-line log-info"><span class="log-msg">Log geleert.</span></div>';
+}
+
+function appendLog(rows) {
+  const log = document.getElementById('audit-log');
+  rows.forEach(r => {
+    const div = document.createElement('div');
+    div.className = 'log-line log-' + String(r.level || 'info').toLowerCase();
+    div.innerHTML =
+      '<span class="log-time">' + String(r.created_at || '').slice(11,19) + '</span>' +
+      '<span class="log-level">' + escHtml(r.level) + '</span>' +
+      '<span class="log-msg">' + escHtml(r.message) + '</span>';
+    log.appendChild(div);
+    lastLogId = r.id;
+  });
+  log.scrollTop = log.scrollHeight;
+}
+
+// Poll logs when audit is running
+(function pollLogs() {
+  if (!document.querySelector('.badge-running')) return;
+  function fetchLogs() {
+    fetch('/api/logs/' + ORDER_ID + '?after=' + lastLogId)
+      .then(r => r.json())
+      .then(rows => {
+        if (rows.length) {
+          appendLog(rows);
+          const last = rows[rows.length - 1];
+          if (last.message && (last.message.includes('AUDIT ABGESCHLOSSEN') || last.message.includes('abgeschlossen'))) {
+            setTimeout(() => location.reload(), 2000);
+          }
+        }
+      })
+      .catch(() => {});
+  }
+  setInterval(fetchLogs, 3000);
+})();
+
+// Init: progress bar width + class
+(function() {
+  var bar = document.getElementById('task-progress-bar');
+  if (bar) {
+    var pct = parseInt(bar.dataset.pct) || 0;
+    bar.style.width = pct + '%';
+    if (pct === 100) bar.classList.add('progress-done');
+    else if (pct >= 60) bar.classList.add('progress-ok');
+  }
+})();
+
+// Attach change handler to all task checkboxes
+document.querySelectorAll('.task-check').forEach(function(el) {
+  el.addEventListener('change', function() { toggleTask(parseInt(this.dataset.tid), this); });
+});
+
+// Event delegation for data-action buttons
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  var action = btn.dataset.action;
+  var tid = parseInt(btn.dataset.tid);
+  var fid = parseInt(btn.dataset.fid);
+  if (action === 'save-notes') saveTaskNotes(tid);
+  else if (action === 'hide-notes') hideNotes(tid);
+  else if (action === 'show-notes') showNotes(tid);
+  else if (action === 'delete-finding') deleteFinding(fid);
+});
+</script>
+{% endblock %}
+

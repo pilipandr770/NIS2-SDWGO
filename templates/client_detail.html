@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ client.company }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ client.company }}</h1>
+    <div class="sub">Kundenprofil · #{{ client.id }}</div>
+  </div>
+  <div class="header-actions">
+    <a href="{{ url_for('edit_client', cid=client.id) }}" class="btn btn-secondary">✏ Bearbeiten</a>
+    <a href="{{ url_for('new_angebot') }}" class="btn btn-primary">+ Angebot</a>
+  </div>
+</div>
+
+<div class="two-col">
+<div>
+<div class="panel">
+  <h3>Kontaktdaten</h3>
+  <table class="info-table">
+    <tr><td>Firma</td><td><b>{{ client.company }}</b></td></tr>
+    {% if client.contact %}<tr><td>Ansprechpartner</td><td>{{ client.contact }}</td></tr>{% endif %}
+    <tr><td>E-Mail</td><td><a href="mailto:{{ client.email }}" style="color:var(--accent2)">{{ client.email }}</a></td></tr>
+    {% if client.phone %}<tr><td>Telefon</td><td>{{ client.phone }}</td></tr>{% endif %}
+    {% if client.address %}<tr><td>Adresse</td><td>{{ client.address }}</td></tr>{% endif %}
+    {% if client.ustid %}<tr><td>USt-ID</td><td>{{ client.ustid }}</td></tr>{% endif %}
+    <tr><td>Angelegt</td><td>{{ client.created_at[:10] }}</td></tr>
+    {% if client.notes %}
+    <tr><td>Notizen</td><td style="font-size:12px;color:var(--text2)">{{ client.notes }}</td></tr>
+    {% endif %}
+  </table>
+</div>
+</div>
+
+<div>
+<div class="panel">
+  <div class="panel-header">
+    <h3>Aufträge ({{ orders|length }})</h3>
+    <a href="{{ url_for('new_angebot') }}" style="font-size:12px;color:var(--accent2)">+ Neu</a>
+  </div>
+  {% if orders %}
+  <div class="card-list">
+    {% for o in orders %}
+    <a href="{{ url_for('order_detail', oid=o.id) }}" class="card-item">
+      <div>
+        <div class="card-title">{{ o.angebot_num or 'Auftrag #' + o.id|string }}</div>
+        <div class="card-sub">{{ o.target }}</div>
+      </div>
+      <div class="card-right">
+        <span class="badge badge-{{ o.status }}">{{ o.status }}</span>
+        <span class="card-date">{{ o.created_at[:10] }}</span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">Noch keine Aufträge für diesen Kunden.</div>
+  {% endif %}
+</div>
+</div>
+</div>
+{% endblock %}

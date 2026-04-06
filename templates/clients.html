@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Kunden{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Kunden</h1>
+    <div class="sub">{{ clients|length }} Kunden gesamt</div>
+  </div>
+  <a href="{{ url_for('new_client') }}" class="btn btn-primary">+ Neuer Kunde</a>
+</div>
+
+{% if clients %}
+<div class="card-list">
+  {% for c in clients %}
+  <a href="{{ url_for('client_detail', cid=c.id) }}" class="card-item">
+    <div>
+      <div class="card-title">{{ c.company }}</div>
+      <div class="card-sub">{{ c.contact or '' }}{% if c.contact and c.email %} · {% endif %}{{ c.email }}{% if c.phone %} · {{ c.phone }}{% endif %}</div>
+      {% if c.address %}<div class="card-sub" style="font-size:11px;color:var(--text3)">{{ c.address }}</div>{% endif %}
+    </div>
+    <div class="card-right">
+      {% if c.ustid %}<span style="font-size:11px;color:var(--text3)">{{ c.ustid }}</span>{% endif %}
+      <span class="card-date">seit {{ c.created_at[:10] }}</span>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">
+  <div class="empty">
+    Noch keine Kunden erfasst.<br>
+    <a href="{{ url_for('new_client') }}" class="btn btn-primary" style="margin-top:12px;display:inline-flex">+ Ersten Kunden anlegen</a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
