@@ -3,6 +3,7 @@ NIS2 Audit Agent — Claude-powered automated security audit
 Supported tools: nmap, nuclei, httpx, subfinder, testssl, nikto, dns_audit, cookie_check
 """
 import os
+import re
 import json
 import subprocess
 import shutil
@@ -41,6 +42,18 @@ def _add_finding(order_id: int, title: str, description: str, severity: str,
         (order_id, title, description, severity, rank, target,
          recommendation, cvss, dsgvo_article, tool, datetime.now().isoformat())
     )
+
+
+_EN_RE = re.compile(
+    r'\b(the |this |these |should |has been |was found|there is |it is |'
+    r'in order to |to ensure |the following |make sure |recommend that |'
+    r'we recommend |you should |please |vulnerability was|attack can)\b',
+    re.IGNORECASE,
+)
+
+def _is_english(text: str) -> bool:
+    """Return True if text contains more than 2 English indicator phrases."""
+    return len(_EN_RE.findall(text or "")) > 2
 
 
 def _run_cmd(cmd: list, timeout: int = 90) -> str:
@@ -534,27 +547,42 @@ def run_audit_agent(order_id: int, target: str, company: str):
 
                 elif tool_name == "add_finding":
                     finding_tool = tool_input.get("tool", "") or last_tool_run
-                    _add_finding(
-                        order_id,
-                        title          = tool_input.get("title",""),
-                        description    = tool_input.get("description",""),
-                        severity       = tool_input.get("severity","info"),
-                        recommendation = tool_input.get("recommendation",""),
-                        cvss           = tool_input.get("cvss",""),
-                        dsgvo_article  = tool_input.get("dsgvo_article",""),
-                        target         = tool_input.get("target", target),
-                        tool           = finding_tool,
-                    )
-                    if finding_tool in tools_used:
-                        tools_used[finding_tool]["findings"] = tools_used[finding_tool].get("findings", 0) + 1
-                    _log(order_id, "FINDING",
-                         f"[{tool_input.get('severity','info').upper()}] {tool_input.get('title','')}"
-                         + (f" ({finding_tool})" if finding_tool else ""))
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_use_id,
-                        "content": "Finding gespeichert"
-                    })
+                    desc = tool_input.get("description", "")
+                    rec  = tool_input.get("recommendation", "")
+                    if _is_english(desc) or _is_english(rec):
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": (
+                                "FEHLER: Beschreibung oder Empfehlung ist auf Englisch. "
+                                "Bitte das Finding VOLLSTÄNDIG auf Deutsch neu erstellen. "
+                                "Kein englischer Text erlaubt."
+                            ),
+                        })
+                        _log(order_id, "WARN",
+                             f"Englisches Finding abgelehnt: {tool_input.get('title','')[:60]}")
+                    else:
+                        _add_finding(
+                            order_id,
+                            title          = tool_input.get("title",""),
+                            description    = desc,
+                            severity       = tool_input.get("severity","info"),
+                            recommendation = rec,
+                            cvss           = tool_input.get("cvss",""),
+                            dsgvo_article  = tool_input.get("dsgvo_article",""),
+                            target         = tool_input.get("target", target),
+                            tool           = finding_tool,
+                        )
+                        if finding_tool in tools_used:
+                            tools_used[finding_tool]["findings"] = tools_used[finding_tool].get("findings", 0) + 1
+                        _log(order_id, "FINDING",
+                             f"[{tool_input.get('severity','info').upper()}] {tool_input.get('title','')}"
+                             + (f" ({finding_tool})" if finding_tool else ""))
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": "Finding gespeichert"
+                        })
 
                 elif tool_name == "log_message":
                     _log(order_id,

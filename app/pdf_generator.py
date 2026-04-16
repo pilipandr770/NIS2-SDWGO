@@ -340,6 +340,36 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
     missing      = [h for h in live.get("headers",[]) if not h.get("good")]
     art32_issues = missing + [{"note":w} for w in live.get("warnings",[])]
 
+    # ── Auto-inject SPF/DMARC finding EARLY (before Sec.6 computation) ───────
+    dns = live.get("dns", {})
+    if dns:
+        existing_titles = " ".join(f.get("title","").lower() for f in findings)
+        if (not dns.get("spf_ok") or not dns.get("dmarc_ok") or not dns.get("dkim_ok")) \
+                and "spf" not in existing_titles and "dmarc" not in existing_titles \
+                and "e-mail" not in existing_titles:
+            missing_email = []
+            if not dns.get("spf_ok"):   missing_email.append("SPF")
+            if not dns.get("dmarc_ok"): missing_email.append("DMARC")
+            if not dns.get("dkim_ok"):  missing_email.append("DKIM")
+            findings = list(findings) + [{
+                "title":         f"E-Mail-Authentifizierung fehlt ({', '.join(missing_email)})",
+                "description":   (f"Für die Domain {dns.get('domain','')} fehlen folgende DNS-Sicherheitseinträge: "
+                                  f"{', '.join(missing_email)}. Ohne SPF kann die Absenderadresse gefälscht werden "
+                                  f"(E-Mail-Spoofing). Ohne DMARC gibt es keine Richtlinie für nicht autorisierte E-Mails. "
+                                  f"Ohne DKIM fehlt die kryptografische Signierung ausgehender E-Mails."),
+                "severity":      "low",
+                "cvss":          "3.7",
+                "dsgvo_article": "Art. 25 DSGVO / Art. 32 DSGVO / §30 Abs. 2 Nr. 1 BSIG",
+                "target":        dns.get("domain",""),
+                "tool":          "dns_audit",
+                "recommendation": (f"SPF-TXT-Record setzen (z. B. \"v=spf1 include:_spf.example.com -all\"), "
+                                   f"DMARC-Record mit policy=reject konfigurieren "
+                                   f"(\"v=DMARC1; p=reject; rua=mailto:dmarc@{dns.get('domain','')}\"), "
+                                   f"DKIM-Schlüsselpaar beim E-Mail-Provider aktivieren."),
+            }]
+            counts["low"] = counts.get("low", 0) + 1
+            total = sum(counts.values())
+
     # Build tasks HTML by category
     tasks_html = ""
     if tasks:
@@ -498,51 +528,60 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
                   "".join(f'<li>{esc(i.get("note","") or i.get("name",""))}</li>' for i in art32_issues if i.get("note") or i.get("name")) +
                   "</ul></div>") if art32_issues else '<p class="ok">✓ Konform</p>'
 
-    # ── Auto-inject SPF/DMARC finding if missing from findings but detected by live-check ──────
-    dns = live.get("dns", {})
-    if dns:
-        existing_titles = " ".join(f.get("title","").lower() for f in findings)
-        if (not dns.get("spf_ok") or not dns.get("dmarc_ok") or not dns.get("dkim_ok")) \
-                and "spf" not in existing_titles and "dmarc" not in existing_titles \
-                and "e-mail" not in existing_titles:
-            missing_email = []
-            if not dns.get("spf_ok"):   missing_email.append("SPF")
-            if not dns.get("dmarc_ok"): missing_email.append("DMARC")
-            if not dns.get("dkim_ok"):  missing_email.append("DKIM")
-            findings = list(findings) + [{
-                "title":         f"E-Mail-Authentifizierung fehlt ({', '.join(missing_email)})",
-                "description":   f"Für die Domain {esc(dns.get('domain',''))} fehlen folgende DNS-Sicherheitseinträge: "
-                                  f"{', '.join(missing_email)}. Ohne SPF kann die Absenderadresse gefälscht werden "
-                                  f"(E-Mail-Spoofing). Ohne DMARC gibt es keine Richtlinie für nicht autorisierte E-Mails. "
-                                  f"Ohne DKIM fehlt die kryptografische Signierung ausgehender E-Mails.",
-                "severity":      "low",
-                "cvss":          "3.7",
-                "dsgvo_article": "Art. 25 DSGVO / Art. 32 DSGVO / §30 Abs. 2 Nr. 1 BSIG",
-                "target":        dns.get("domain",""),
-                "recommendation": f"SPF-TXT-Record setzen (z. B. \"v=spf1 include:_spf.example.com -all\"), "
-                                  f"DMARC-Record mit policy=reject konfigurieren "
-                                  f"(\"v=DMARC1; p=reject; rua=mailto:dmarc@{dns.get('domain','')}\"), "
-                                  f"DKIM-Schlüsselpaar beim E-Mail-Provider aktivieren.",
-            }]
-            # Recalculate counts after injection
-            counts["low"] = counts.get("low", 0) + 1
-            total = sum(counts.values())
+    # ── Section 6: DSGVO analysis driven by final findings list ─────────────
+    # Helper: collect non-info findings mentioning a DSGVO article keyword
+    def _findings_for(art_keywords: list) -> list:
+        kws = [k.lower() for k in art_keywords]
+        return [f for f in findings
+                if f.get("severity","info").lower() != "info"
+                and any(kw in (f.get("dsgvo_article","") or "").lower() for kw in kws)]
 
-    # ── Dynamic Art. 25 (Privacy by Design) assessment ────────────────────────
     cookie_issues = [c for c in live.get("cookies",[]) if not c.get("good")]
-    art25_issues = []
-    if not dns.get("spf_ok"):  art25_issues.append("SPF fehlt")
-    if not dns.get("dmarc_ok"): art25_issues.append("DMARC fehlt")
-    permissions_ok = any(h.get("key")=="permissions-policy" and h.get("good") for h in live.get("headers",[]))
-    if not permissions_ok: art25_issues.append("Permissions-Policy fehlt")
-    if cookie_issues: art25_issues.append(f"{len(cookie_issues)} Cookie(s) ohne Sicherheits-Flags")
-    art25_html = ('<p class="ok">✓ Konform</p>' if not art25_issues
-                  else f'<p class="fail">✗ Mängel: {esc(", ".join(art25_issues))}</p>')
 
-    # ── Dynamic §25 TTDSG assessment ──────────────────────────────────────────
-    ttdsg_html = ('<p class="ok">✓ Cookie-Consent nicht geprüft (außerhalb automatischem Scope)</p>'
+    # Art. 5 §1f — Integrity & Confidentiality: header failures, TLS issues, general
+    art5_findings = _findings_for(["art. 5", "art.5", "§30"])
+    if not art5_findings:
+        art5_html = '<p class="ok">✓ Konform — keine technischen Verstöße festgestellt</p>'
+    else:
+        art5_html = (f'<p class="fail">✗ {len(art5_findings)} Verstoß/-verstöße festgestellt</p>'
+                     f'<ul style="margin:4px 0 0 14px;font-size:10px">'
+                     + "".join(f'<li>[{f.get("severity","").upper()}] {esc(f.get("title",""))}</li>' for f in art5_findings)
+                     + '</ul>')
+
+    # Art. 25 — Privacy by Design: SPF/DMARC/DKIM, Permissions-Policy, Cookies
+    art25_findings = _findings_for(["art. 25", "art.25"])
+    permissions_ok = any(h.get("key") == "permissions-policy" and h.get("good")
+                         for h in live.get("headers", []))
+    if not art25_findings and permissions_ok and not cookie_issues:
+        art25_html = '<p class="ok">✓ Konform</p>'
+    else:
+        items_25 = [f'[{f.get("severity","").upper()}] {esc(f.get("title",""))}' for f in art25_findings]
+        if not permissions_ok:
+            items_25.append("Permissions-Policy fehlt (Browser-Feature-Kontrolle)")
+        if cookie_issues:
+            items_25.append(f"{len(cookie_issues)} Cookie(s) ohne Sicherheits-Flags")
+        art25_html = (f'<p class="fail">✗ {len(items_25)} Mängel</p>'
+                      f'<ul style="margin:4px 0 0 14px;font-size:10px">'
+                      + "".join(f'<li>{esc(i)}</li>' for i in items_25)
+                      + '</ul>')
+
+    # Art. 32 — Technical & Organisational Measures: security headers, TLS, everything
+    art32_findings = _findings_for(["art. 32", "art.32"])
+    if not art32_findings:
+        art32_html = '<p class="ok">✓ Konform — keine technischen TOMs-Verstöße festgestellt</p>'
+    else:
+        art32_html = (f'<p class="fail">✗ {len(art32_findings)} Verstoß/-verstöße</p>'
+                      f'<ul style="margin:4px 0 0 14px;font-size:10px">'
+                      + "".join(f'<li>[{f.get("severity","").upper()}] {esc(f.get("title",""))}'
+                                f'<span style="color:#888;font-size:9px"> — CVSS: {esc(f.get("cvss","") or "N/A")}</span></li>'
+                                for f in art32_findings)
+                      + '</ul>')
+
+    # §25 TTDSG — Cookie Consent
+    ttdsg_html = ('<p class="ok">✓ Keine Cookie-Probleme festgestellt</p>'
                   if not cookie_issues
-                  else f'<p class="warn">⚠ {len(cookie_issues)} Cookie(s) ohne korrekte Flags — Cookie-Consent-Banner prüfen (§25 TTDSG)</p>')
+                  else f'<p class="warn">⚠ {len(cookie_issues)} Cookie(s) ohne korrekte Flags — '
+                       f'Cookie-Consent-Banner prüfen (§25 TTDSG)</p>')
 
     # ── Dynamic recommendations from actual findings ───────────────────────────
     crit_findings = [f for f in findings if f.get("severity") == "critical"]
@@ -657,8 +696,9 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
 {task_stats_html}
 {tasks_html}
 
-<h2 class="pb">6. DSGVO Compliance-Analyse (Art. 32)</h2>
-<h3>Art. 5 §1f DSGVO — Integrität und Vertraulichkeit</h3>{('<p class="ok">✓ Konform</p>' if not art32_issues else '<p class="fail">✗ Mängel festgestellt</p>')}
+<h2 class="pb">6. DSGVO Compliance-Analyse</h2>
+<p style="font-size:9px;color:#666;margin-bottom:8px">Die nachfolgende Analyse basiert ausschließlich auf den in Abschnitt 4 dokumentierten Sicherheitsbefunden und ist damit vollständig konsistent mit den Prüfergebnissen.</p>
+<h3>Art. 5 Abs. 1f DSGVO — Integrität und Vertraulichkeit</h3>{art5_html}
 <h3>Art. 25 DSGVO — Privacy by Design &amp; by Default</h3>{art25_html}
 <h3>Art. 32 DSGVO — Technische und organisatorische Maßnahmen (TOM)</h3>{art32_html}
 <h3>Art. 33 DSGVO — Meldung von Datenschutzverletzungen (NIS2 §32 BSIG)</h3><p class="ok">✓ Konform — Meldepflicht: 24h Erstmeldung, 72h Detailmeldung, 1 Monat Abschlussbericht</p>
