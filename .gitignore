@@ -1,6 +1,15 @@
 # Environment variables (contains secrets!)
 .env
 
+# SSL certificates (contain private keys — NEVER commit!)
+ssl/
+*.pem
+*.key
+*.crt
+
+# Generated reports (client data!)
+reports/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -46,6 +46,7 @@
   <div class="action-grid">
     {% if order.status in ['angebot','active','done'] %}
     <form method="post" action="{{ url_for('start_audit', oid=order.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn btn-primary btn-block" onclick="return confirm('KI-Audit starten? Der Agent führt automatisierte Sicherheitsprüfungen durch.')">
         ▶ KI-Audit starten (automatisch)
       </button>
@@ -53,6 +54,7 @@
     {% endif %}
 
     <form method="post" action="{{ url_for('generate_report', oid=order.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn btn-success btn-block">📄 Compliance-Bericht generieren</button>
     </form>
 
@@ -61,6 +63,7 @@
 
     <div class="status-form" style="margin-top:8px">
       <form method="post" action="{{ url_for('update_status', oid=order.id) }}" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <select name="status" class="select-sm">
           <option value="angebot"   {% if order.status=='angebot'   %}selected{% endif %}>Angebot</option>
           <option value="active"    {% if order.status=='active'    %}selected{% endif %}>Aktiv</option>
@@ -225,7 +228,7 @@
 <div class="panel" style="margin-top:0">
   <h3>Regulatorische Grundlagen</h3>
   <div style="font-size:11px;line-height:1.9;color:var(--text2)">
-    <div><b style="color:var(--text)">NIS2 / §30 BSIG</b><br>Mindestmaßnahmen für KRITIS und wichtige Einrichtungen. Umsetzung bis 17.10.2024.</div>
+    <div><b style="color:var(--text)">NIS2 / §30 BSIG</b><br>Mindestmaßnahmen für KRITIS und wichtige Einrichtungen. Umsetzungspflicht seit 17.10.2024.</div>
     <div style="margin-top:8px"><b style="color:var(--text)">DSGVO Art. 32</b><br>Technische &amp; organisatorische Maßnahmen (TOM) zum Schutz personenbezogener Daten.</div>
     <div style="margin-top:8px"><b style="color:var(--text)">Meldepflicht §32 BSIG</b><br>Erhebliche Vorfälle: 24h → Erstmeldung, 72h → Detailmeldung, 1 Monat → Abschlussbericht.</div>
     <div style="margin-top:8px"><b style="color:var(--text)">Bußgelder NIS2</b><br>KRITIS: bis 10 Mio. EUR / 2% Umsatz. Wichtige Einrichtungen: bis 7 Mio. EUR.</div>
@@ -245,8 +248,17 @@ const ORDER_ID = parseInt(document.getElementById('_oid').value);
 const ORDER_TARGET = document.getElementById('_otgt').value;
 let lastLogId = parseInt(document.getElementById('_lid').value);
 
+// CSRF token from meta tag
+const CSRF_TOKEN = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+
 function escHtml(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+}
+
+function apiFetch(url, options) {
+  options = options || {};
+  options.headers = Object.assign({ 'X-CSRFToken': CSRF_TOKEN }, options.headers || {});
+  return fetch(url, options);
 }
 
 // ── Findings ─────────────────────────────────────────────────────────────────
@@ -262,7 +274,7 @@ function addFinding() {
     recommendation: document.getElementById('f-rec').value.trim(),
     target:       ORDER_TARGET
   };
-  fetch('/api/findings/' + ORDER_ID, {
+  apiFetch('/api/findings/' + ORDER_ID, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(data)
@@ -271,12 +283,12 @@ function addFinding() {
 
 function deleteFinding(fid) {
   if (!confirm('Befund löschen?')) return;
-  fetch('/api/findings/' + fid, { method: 'DELETE' }).then(() => location.reload());
+  apiFetch('/api/findings/' + fid, { method: 'DELETE' }).then(() => location.reload());
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 function toggleTask(tid, el) {
-  fetch('/api/tasks/' + tid + '/toggle', { method: 'POST' })
+  apiFetch('/api/tasks/' + tid + '/toggle', { method: 'POST' })
     .then(r => r.json())
     .then(data => {
       const row = document.getElementById('task-row-' + tid);
@@ -314,7 +326,7 @@ function hideNotes(tid) {
 }
 function saveTaskNotes(tid) {
   const notes = document.getElementById('notes-val-' + tid).value;
-  fetch('/api/tasks/' + tid + '/notes', {
+  apiFetch('/api/tasks/' + tid + '/notes', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ notes: notes })
@@ -325,8 +337,8 @@ function saveTaskNotes(tid) {
 function runLiveCheck() {
   const div = document.getElementById('live-result');
   div.style.display = 'block';
-  div.innerHTML = '<span style="color:var(--text2)">⏳ Prüfe Headers und TLS…</span>';
-  fetch('/api/live-check?target=' + encodeURIComponent(ORDER_TARGET))
+  div.innerHTML = '<span style="color:var(--text2)">⏳ Prüfe Headers, TLS, Cookies und DNS…</span>';
+  apiFetch('/api/live-check?target=' + encodeURIComponent(ORDER_TARGET))
     .then(r => r.json())
     .then(data => {
       let html = '<div class="lc-title">Live-Check: ' + escHtml(ORDER_TARGET) + '</div>';
@@ -334,7 +346,7 @@ function runLiveCheck() {
         html += '<div class="lc-warn">⚠ ' + escHtml(data.fetch_error) + '</div>';
       } else {
         const tg = data.tls_grade || '';
-        const tc = tg === 'A' ? 'lc-ok' : 'lc-fail';
+        const tc = tg === 'A' ? 'lc-ok' : (tg === '?' ? 'lc-warn' : 'lc-fail');
         html += '<div class="lc-row">TLS: <b class="' + tc + '">' + escHtml(tg) + '</b> · ' + escHtml(data.tls_version || '') + ' · ' + escHtml(data.tls_issuer || '') + '</div>';
         (data.headers || []).forEach(h => {
           const cls = h.good ? 'lc-ok' : 'lc-fail';
@@ -343,6 +355,20 @@ function runLiveCheck() {
                 + (h.value ? ' <span style="color:var(--text3);font-size:10px">(' + escHtml(h.value.slice(0,50)) + ')</span>' : '')
                 + '</div>';
         });
+        // Cookie summary
+        const badCookies = (data.cookies || []).filter(c => !c.good);
+        if (badCookies.length) {
+          html += '<div class="lc-row"><span class="lc-fail">✗</span> Cookies mit fehlenden Flags: ' + escHtml(badCookies.map(c => c.name).join(', ')) + '</div>';
+        }
+        // DNS summary
+        const dns = data.dns || {};
+        if (dns.domain) {
+          html += '<div class="lc-row">'
+            + (dns.spf_ok   ? '<span class="lc-ok">✓ SPF</span>' : '<span class="lc-fail">✗ SPF fehlt</span>') + ' · '
+            + (dns.dmarc_ok ? '<span class="lc-ok">✓ DMARC(' + escHtml(dns.dmarc_policy||'') + ')</span>' : '<span class="lc-fail">✗ DMARC fehlt</span>') + ' · '
+            + (dns.dkim_ok  ? '<span class="lc-ok">✓ DKIM</span>' : '<span class="lc-fail">✗ DKIM</span>')
+            + '</div>';
+        }
       }
       div.innerHTML = html;
     })
@@ -376,7 +402,7 @@ function appendLog(rows) {
 (function pollLogs() {
   if (!document.querySelector('.badge-running')) return;
   function fetchLogs() {
-    fetch('/api/logs/' + ORDER_ID + '?after=' + lastLogId)
+    apiFetch('/api/logs/' + ORDER_ID + '?after=' + lastLogId)
       .then(r => r.json())
       .then(rows => {
         if (rows.length) {

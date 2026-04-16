@@ -16,6 +16,7 @@
 {% else %}
 <div class="panel" style="max-width:700px">
   <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-row">
       <label>Kunde *</label>
       <select name="client_id" class="input-full" required>
@@ -37,12 +38,12 @@
 
     <div class="two-col">
       <div class="form-row">
-        <label>Auftragssumme (EUR)</label>
-        <input type="text" name="amount" class="input-full" value="1500" placeholder="1500">
-      </div>
+      <label>Auftragssumme (EUR)</label>
+      <input type="number" name="amount" class="input-full" value="1500" min="0" step="50" placeholder="1500">
+    </div>
       <div class="form-row">
         <label>Laufzeit / Liefertermin</label>
-        <input type="text" name="scope" class="input-full" placeholder="7–14 Werktage">
+        <input type="text" name="delivery" class="input-full" placeholder="7–14 Werktage">
       </div>
     </div>
 

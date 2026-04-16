@@ -2,17 +2,35 @@ services:
   nis2audit:
     build: .
     image: nis2audit:latest
-    ports:
-      - "5000:5000"
+    expose:
+      - "5000"
     environment:
-      - SECRET_KEY=change-me-strong-secret-key-32chars
-      - ADMIN_EMAIL=admin@andrii-it.de
-      - ADMIN_PASSWORD=andrii-it-2026
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@andrii-it.de}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - DB_PATH=/data/nis2audit.db
+      - HTTPS=1
     volumes:
       - nis2audit_data:/data
       - nis2audit_reports:/app/reports
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - nis2audit
     restart: unless-stopped
 
 volumes:

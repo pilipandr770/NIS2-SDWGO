@@ -157,6 +157,7 @@ def init_db():
             recommendation  TEXT,
             cvss            TEXT,
             dsgvo_article   TEXT,
+            tool            TEXT,
             created_at      TEXT NOT NULL
         );
 
@@ -185,6 +186,16 @@ def init_db():
     conn.commit()
     conn.close()
     print("DB initialized:", DB_PATH)
+
+
+def migrate_db():
+    """Safe incremental migrations — add columns that may not exist in older DBs."""
+    conn = get_db()
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
+    if "tool" not in cols:
+        conn.execute("ALTER TABLE findings ADD COLUMN tool TEXT")
+        conn.commit()
+    conn.close()
 
 
 def create_order_tasks(order_id: int):

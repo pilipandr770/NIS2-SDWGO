@@ -21,9 +21,10 @@
     {% endwith %}
 
     <form method="post" class="login-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-row">
         <label>E-Mail</label>
-        <input type="email" name="email" class="input-full" placeholder="admin@andrii-it.de" required autofocus>
+        <input type="email" name="email" class="input-full" placeholder="E-Mail-Adresse" required autofocus>
       </div>
       <div class="form-row">
         <label>Passwort</label>

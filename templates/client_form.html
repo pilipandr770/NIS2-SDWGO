@@ -10,6 +10,7 @@
 
 <div class="panel" style="max-width:640px">
   <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="two-col">
       <div class="form-row">
         <label>Firma *</label>

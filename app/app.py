@@ -3,14 +3,19 @@ NIS2Audit — Flask додаток для надання послуг NIS2/DSGVO
 Andrii-IT | IT-Sicherheitsdienstleistungen
 """
 
-import os, secrets, hashlib, json, subprocess, threading, uuid
+import os, secrets, json, subprocess, threading, uuid, re
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, flash, jsonify, send_from_directory, g
+    session, flash, jsonify, send_from_directory, g, abort
 )
-from models import init_db, db_query, db_execute, create_order_tasks
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
+from models import init_db, migrate_db, db_query, db_execute, create_order_tasks
 from pdf_generator import generate_angebot_pdf, generate_report_pdf
 from live_check import fetch_live_check
 from agent import run_audit_agent
@@ -20,12 +25,24 @@ app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("HTTPS", "0") == "1"
+app.config["WTF_CSRF_TIME_LIMIT"] = 3600
+app.config["WTF_CSRF_HEADERS"] = ["X-CSRFToken"]
+
+csrf    = CSRFProtect(app)
+limiter = Limiter(app=app, key_func=get_remote_address,
+                  default_limits=[], storage_uri="memory://")
 
 REPORTS_DIR = os.path.join(os.path.dirname(__file__), "..", "reports")
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "andrii-it-2026")
-ADMIN_EMAIL    = os.environ.get("ADMIN_EMAIL", "admin@andrii-it.de")
+_ADMIN_PASSWORD_RAW = os.environ.get("ADMIN_PASSWORD", "andrii-it-2026")
+_ADMIN_HASH         = generate_password_hash(_ADMIN_PASSWORD_RAW)
+del _ADMIN_PASSWORD_RAW          # erase plaintext from memory
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@andrii-it.de")
+
+# Allowed file extensions in reports directory
+_ALLOWED_REPORT_EXT = {".pdf", ".html"}
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 def login_required(f):
@@ -46,11 +63,13 @@ def inject_globals():
 
 # ── Login/Logout ──────────────────────────────────────────────────────────────
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("10 per minute")
 def login():
     if request.method == "POST":
-        email = request.form.get("email", "").strip()
+        email = request.form.get("email", "").strip().lower()
         pwd   = request.form.get("password", "")
-        if email == ADMIN_EMAIL and pwd == ADMIN_PASSWORD:
+        if email == ADMIN_EMAIL.lower() and check_password_hash(_ADMIN_HASH, pwd):
+            session.permanent = True
             session["logged_in"] = True
             session["user_email"] = email
             return redirect(url_for("dashboard"))
@@ -247,11 +266,12 @@ def generate_report(oid):
     order    = order[0]
     findings = db_query("SELECT * FROM findings WHERE order_id=? ORDER BY severity_rank", (oid,))
     tasks    = db_query("SELECT * FROM order_tasks WHERE order_id=? ORDER BY category, id", (oid,))
+    logs     = db_query("SELECT * FROM audit_logs WHERE order_id=? ORDER BY created_at ASC", (oid,))
     live     = fetch_live_check(order["target"])
 
     pdf_name = f"Bericht_{order['company'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
     pdf_path = os.path.join(REPORTS_DIR, pdf_name)
-    generate_report_pdf(pdf_path, order, findings, live, tasks)
+    generate_report_pdf(pdf_path, order, findings, live, tasks, logs)
 
     db_execute("UPDATE orders SET report_pdf=?,status='completed',updated_at=? WHERE id=?",
                (pdf_name, datetime.now().isoformat(), oid))
@@ -264,18 +284,30 @@ def generate_report(oid):
 @app.route("/download/<filename>")
 @login_required
 def download(filename):
-    # Prefer real PDF; fall back to HTML if WeasyPrint was unavailable
-    full = os.path.join(REPORTS_DIR, filename)
+    # Prevent path traversal — only allow safe filenames from REPORTS_DIR
+    safe = secure_filename(filename)
+    if not safe:
+        abort(404)
+    ext = os.path.splitext(safe)[1].lower()
+    if ext not in _ALLOWED_REPORT_EXT:
+        abort(403)
+    full = os.path.join(REPORTS_DIR, safe)
     if not os.path.exists(full):
-        alt = filename.replace(".pdf", ".html") if filename.endswith(".pdf") else filename.replace(".html", ".pdf")
+        # Try the alternative extension (pdf <-> html)
+        alt_ext = ".html" if ext == ".pdf" else ".pdf"
+        alt = os.path.splitext(safe)[0] + alt_ext
         if os.path.exists(os.path.join(REPORTS_DIR, alt)):
-            filename = alt
-    as_attachment = filename.endswith(".pdf")
-    return send_from_directory(REPORTS_DIR, filename, as_attachment=as_attachment)
+            safe = alt
+        else:
+            abort(404)
+    as_attachment = safe.endswith(".pdf")
+    return send_from_directory(REPORTS_DIR, safe, as_attachment=as_attachment)
 
 # ── API: live check ───────────────────────────────────────────────────────────
 @app.route("/api/live-check")
 @login_required
+@csrf.exempt
+@limiter.limit("30 per minute")
 def api_live_check():
     target = request.args.get("target","")
     if not target:
@@ -286,6 +318,7 @@ def api_live_check():
 # ── API: findings ─────────────────────────────────────────────────────────────
 @app.route("/api/findings/<int:oid>", methods=["POST"])
 @login_required
+@csrf.exempt
 def add_finding(oid):
     data = request.json
     RANK = {"critical":1,"high":2,"medium":3,"low":4,"info":5}
@@ -301,6 +334,7 @@ def add_finding(oid):
 
 @app.route("/api/findings/<int:fid>", methods=["DELETE"])
 @login_required
+@csrf.exempt
 def delete_finding(fid):
     db_execute("DELETE FROM findings WHERE id=?", (fid,))
     return jsonify({"ok": True})
@@ -308,6 +342,7 @@ def delete_finding(fid):
 # ── API: tasks ────────────────────────────────────────────────────────────────
 @app.route("/api/tasks/<int:tid>/toggle", methods=["POST"])
 @login_required
+@csrf.exempt
 def toggle_task(tid):
     task = db_query("SELECT * FROM order_tasks WHERE id=?", (tid,))
     if not task:
@@ -319,6 +354,7 @@ def toggle_task(tid):
 
 @app.route("/api/tasks/<int:tid>/notes", methods=["POST"])
 @login_required
+@csrf.exempt
 def update_task_notes(tid):
     notes = (request.json or {}).get("notes", "")
     db_execute("UPDATE order_tasks SET notes=? WHERE id=?", (notes[:2000], tid))
@@ -327,6 +363,7 @@ def update_task_notes(tid):
 # ── API: audit log stream ─────────────────────────────────────────────────────
 @app.route("/api/logs/<int:oid>")
 @login_required
+@csrf.exempt
 def get_logs(oid):
     after = request.args.get("after", "0")
     rows  = db_query(
@@ -342,4 +379,5 @@ def _log(order_id, level, message):
 # ── Run ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_db()
+    migrate_db()
     app.run(host="0.0.0.0", port=5000, debug=False)
