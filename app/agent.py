@@ -297,6 +297,38 @@ SEVERITY GUIDELINES:
 - low: Missing DKIM/DMARC, DNSSEC not enabled, minor misconfigs
 - info: Service enumeration results, general observations
 
+EVIDENCE-BASED FINDING RULES (MANDATORY — violations undermine report credibility):
+CVSS scores MUST ONLY be assigned for findings DIRECTLY CONFIRMED by tool output.
+The following topics are NOT verifiable via black-box scan — for ALL of them you MUST use
+severity=low, cvss="" (EMPTY string), and prefix the title with "[Compliance-Hinweis]":
+  - AVV / Auftragsverarbeitungsvertrag — internal contract, not externally visible
+  - DSFA / DPIA (Art. 35 DSGVO) — INTERNAL document, NOT required to be public
+  - SIEM / Log-Management — internal infrastructure, completely invisible from outside
+  - Backup-Strategie / Notfallplan — internal process, not externally verifiable
+  - MFA / Multi-Faktor-Authentifizierung — only verifiable with authenticated login (out-of-scope here)
+  - Verschlüsselung ruhender Daten / Data-at-Rest — not externally visible
+  - API-Sicherheit / API-Dokumentation — requires authenticated API access (out-of-scope)
+  - Authentifizierungsmechanismen / Zugriffsrechte — requires authenticated test (out-of-scope)
+  - Incident Response Prozesse / IRP — internal document
+  - Datenresidenz / Data-Residency — not externally verifiable
+Example correct title: "[Compliance-Hinweis] DSFA-Dokumentation nicht nachgewiesen"
+Example correct description: "Im Rahmen des Black-Box-Audits nicht verifizierbar — erfordert Einsicht in interne Dokumentation / Interview mit Auftraggeber."
+Do NOT assign CVSS 4.0+ to any of the above. "Fehlende DSFA" cannot have CVSS 7.1 —
+you have zero black-box evidence of actual vulnerability impact.
+
+Additional rules:
+- WAF: If Cloudflare or CDN/reverse-proxy detected (httpx output) → severity=info, cvss="",
+  title: "[Compliance-Hinweis] WAF-Ruleset nicht extern verifizierbar"
+  (Cloudflare itself is a WAF — rule-set just cannot be confirmed from outside)
+- MX Records: Absence of MX is often intentional (domain may not send mail) → severity=info, cvss="" only
+- DNSSEC: ONLY create a positive DNSSEC finding if `dig DNSKEY <domain>` returns an ACTUAL DNSKEY record
+  in the tool output. If the output is empty, shows NXDOMAIN, or shows no DNSKEY record, do NOT create
+  a positive finding. Do NOT write titles like "DNSSEC erfolgreich implementiert" unless you can quote
+  the exact DNSKEY record from the tool output. When DNSSEC is absent, create a LOW finding instead.
+- HSTS: Only write "HSTS erfolgreich implementiert" if max-age >= 31536000 (1 year). If max-age is
+  present but less than 1 year (e.g. 15552000 = 180 days), create a LOW finding
+  "HSTS max-age zu kurz (<1 Jahr)" instead of a positive finding.
+
 Complete within {max_iter} iterations. Be thorough — regulatory-grade report required.
 """
 
@@ -391,7 +423,9 @@ def _auto_mark_tasks(order_id: int):
             txt = (f.get("title","") + " " + f.get("description","")).lower()
             if any(k in txt for k in ["tls","ssl","protokoll","cipher","zertifikat"]):
                 problem_areas.add("tls")
-            if any(k in txt for k in ["header","csp","hsts","x-frame","x-content"]):
+            if any(k in txt for k in ["header","csp","hsts","x-frame","x-content",
+                                       "referrer","permissions","clickjacking",
+                                       "mime-sniff","content-security","corp","coop"]):
                 problem_areas.add("headers")
             if any(k in txt for k in ["cookie","secure-flag","httponly","samesite"]):
                 problem_areas.add("cookie")
@@ -399,6 +433,12 @@ def _auto_mark_tasks(order_id: int):
                 problem_areas.add("nmap")
             if any(k in txt for k in ["schwachstelle","cve","nuclei","exploit"]):
                 problem_areas.add("nuclei")
+            if any(k in txt for k in ["mfa","zwei-faktor","2fa","multi-factor","authentifizierung","zugriffsrecht"]):
+                problem_areas.add("mfa")
+            if any(k in txt for k in ["verschlüssel","encryption","aes","tls-verschl"]):
+                problem_areas.add("encryption")
+            if any(k in txt for k in ["backup","datensicher","wiederherstellung","rto","rpo"]):
+                problem_areas.add("backup")
 
     tasks = db_query("SELECT id, title, category FROM order_tasks WHERE order_id=? AND done=0", (order_id,))
     now = datetime.now().isoformat()
@@ -412,7 +452,7 @@ def _auto_mark_tasks(order_id: int):
             mark_done = True
         if "tls/ssl" in ttl and ("testssl" in tools_run or "nmap" in tools_run) and "tls" not in problem_areas:
             mark_done = True
-        if "penetrationstest" in ttl and ("nikto" in tools_run or "nuclei" in tools_run) and "nuclei" not in problem_areas:
+        if ("penetrationstest" in ttl or "web-security-check" in ttl) and ("nikto" in tools_run or "nuclei" in tools_run) and "nuclei" not in problem_areas:
             mark_done = True
         if "schwachstellen-scan" in ttl and "nuclei" in tools_run and "nuclei" not in problem_areas:
             mark_done = True

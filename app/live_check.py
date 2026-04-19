@@ -1,5 +1,5 @@
 ﻿"""
-Live Check вЂ” HTTP Security Headers, TLS/SSL, Cookie Flags, DNS (SPF/DMARC/DKIM)
+Live Check — HTTP Security Headers, TLS/SSL, Cookie Flags, DNS (SPF/DMARC/DKIM)
 """
 import ssl
 import socket
@@ -13,13 +13,13 @@ SECURITY_HEADERS = [
     {
         "name": "Strict-Transport-Security",
         "key": "strict-transport-security",
-        "desc": "HSTS вЂ” erzwingt HTTPS, verhindert SSL-Stripping",
-        "article": "Art. 32 DSGVO / В§30 BSIG",
+        "desc": "HSTS — erzwingt HTTPS, verhindert SSL-Stripping",
+        "article": "Art. 32 DSGVO / §30 BSIG",
     },
     {
         "name": "Content-Security-Policy",
         "key": "content-security-policy",
-        "desc": "CSP вЂ” verhindert XSS und Datenlecks",
+        "desc": "CSP — verhindert XSS und Datenlecks",
         "article": "Art. 32 DSGVO",
     },
     {
@@ -49,13 +49,13 @@ SECURITY_HEADERS = [
     {
         "name": "Cross-Origin-Opener-Policy",
         "key": "cross-origin-opener-policy",
-        "desc": "COOP вЂ” isoliert Cross-Origin-Dokumente",
+        "desc": "COOP — isoliert Cross-Origin-Dokumente",
         "article": "Art. 32 DSGVO",
     },
     {
         "name": "Cross-Origin-Resource-Policy",
         "key": "cross-origin-resource-policy",
-        "desc": "CORP вЂ” verhindert Cross-Origin-Einbindung",
+        "desc": "CORP — verhindert Cross-Origin-Einbindung",
         "article": "Art. 32 DSGVO",
     },
 ]
@@ -69,18 +69,34 @@ def _normalize_url(target: str) -> str:
 
 
 def _get_san_openssl(hostname: str) -> list:
-    """Fallback SAN extraction via openssl s_client when Python ssl omits SANs."""
-    import re
+    """Fallback SAN extraction via openssl.  Uses two-stage pipe for reliability."""
+    import re, shutil
+    if not shutil.which("openssl"):
+        return []
     try:
+        # Stage 1: pipe TLS handshake through openssl x509 -text (most reliable)
+        result = subprocess.run(
+            ["sh", "-c",
+             f"echo '' | openssl s_client -connect {hostname}:443 "
+             f"-servername {hostname} 2>/dev/null "
+             f"| openssl x509 -noout -text 2>/dev/null"],
+            capture_output=True, text=True, timeout=20
+        )
+        matches = re.findall(r"DNS:([A-Za-z0-9.*-]+)", result.stdout)
+        if matches:
+            return list(dict.fromkeys(matches))[:10]
+    except Exception:
+        pass
+    try:
+        # Stage 2: direct s_client (older fallback)
         result = subprocess.run(
             ["openssl", "s_client", "-connect", f"{hostname}:443",
              "-servername", hostname, "-showcerts"],
             input="Q\n", capture_output=True, text=True, timeout=10
         )
         output = result.stdout + result.stderr
-        # Parse: DNS:domain.com, DNS:*.domain.com
         matches = re.findall(r"DNS:([A-Za-z0-9.*-]+)", output)
-        return list(dict.fromkeys(matches))[:10]  # deduplicate, keep order
+        return list(dict.fromkeys(matches))[:10]
     except Exception:
         return []
 
@@ -156,7 +172,7 @@ def _check_cookies(resp_headers: dict) -> list:
     raw_cookies = resp_headers.get("set-cookie", "")
     if not raw_cookies:
         return results
-    # Multiple cookies can appear; urllib merges them with comma вЂ” split by pattern
+    # Multiple cookies can appear; urllib merges them with comma — split by pattern
     for raw in raw_cookies.split("\n") if "\n" in raw_cookies else [raw_cookies]:
         if not raw.strip():
             continue
@@ -264,15 +280,15 @@ def fetch_live_check(target: str) -> dict:
         result.update(tls)
         if tls["tls_grade"] == "D":
             result["warnings"].append(
-                f"Veraltetes TLS-Protokoll: {tls['tls_version']} вЂ” "
-                "TLS 1.0/1.1 sind unsicher (Art. 32 DSGVO / В§30 BSIG)"
+                f"Veraltetes TLS-Protokoll: {tls['tls_version']} — "
+                "TLS 1.0/1.1 sind unsicher (Art. 32 DSGVO / §30 BSIG)"
             )
         if tls["tls_expired"]:
             result["warnings"].append(
-                f"SSL-Zertifikat abgelaufen (seit {tls['tls_expiry']}) вЂ” kritisch!"
+                f"SSL-Zertifikat abgelaufen (seit {tls['tls_expiry']}) — kritisch!"
             )
     except Exception as e:
-        result["warnings"].append(f"TLS-PrГјfung fehlgeschlagen: {e}")
+        result["warnings"].append(f"TLS-Prüfung fehlgeschlagen: {e}")
 
     # DNS / SPF / DMARC / DKIM check
     try:
@@ -282,26 +298,26 @@ def fetch_live_check(target: str) -> dict:
         result["dns"] = dns
         if not dns["spf_ok"]:
             result["warnings"].append(
-                f"SPF-Record fehlt fГјr {dns['domain']} вЂ” E-Mail-Spoofing mГ¶glich"
+                f"SPF-Record fehlt für {dns['domain']} — E-Mail-Spoofing möglich"
             )
         if not dns["dmarc_ok"]:
             result["warnings"].append(
-                f"DMARC-Record fehlt fГјr {dns['domain']} вЂ” Phishing-Risiko"
+                f"DMARC-Record fehlt für {dns['domain']} — Phishing-Risiko"
             )
         elif dns["dmarc_policy"] == "none":
             result["warnings"].append(
-                f"DMARC policy=none fГјr {dns['domain']} вЂ” kein aktiver Schutz"
+                f"DMARC policy=none für {dns['domain']} — kein aktiver Schutz"
             )
         if not dns["dkim_ok"]:
             result["warnings"].append(
-                f"DKIM nicht gefunden fГјr {dns['domain']} вЂ” E-Mail-Authentifizierung fehlt"
+                f"DKIM nicht gefunden für {dns['domain']} — E-Mail-Authentifizierung fehlt"
             )
         if not dns["dnssec_ok"]:
             result["warnings"].append(
-                f"DNSSEC nicht aktiviert fГјr {dns['domain']}"
+                f"DNSSEC nicht aktiviert für {dns['domain']}"
             )
     except Exception as e:
-        result["warnings"].append(f"DNS-PrГјfung fehlgeschlagen: {e}")
+        result["warnings"].append(f"DNS-Prüfung fehlgeschlagen: {e}")
 
     # HTTP headers + cookie check
     try:
@@ -364,20 +380,20 @@ def fetch_live_check(target: str) -> dict:
         server = resp_headers.get("server", "")
         if server and any(x in server.lower() for x in ["apache/", "nginx/", "iis/", "php/", "tomcat/"]):
             result["warnings"].append(
-                f"Server-Banner gibt Version preis: {server} вЂ” Informationsleck (В§30 BSIG)"
+                f"Server-Banner gibt Version preis: {server} — Informationsleck (§30 BSIG)"
             )
 
         # X-Powered-By leak
         xpb = resp_headers.get("x-powered-by", "")
         if xpb:
             result["warnings"].append(
-                f"X-Powered-By Header: {xpb} вЂ” Technologie-Fingerprinting mГ¶glich"
+                f"X-Powered-By Header: {xpb} — Technologie-Fingerprinting möglich"
             )
 
         # HSTS without HTTPS warning
         if url.startswith("https://") and not resp_headers.get("strict-transport-security"):
             result["warnings"].append(
-                "HSTS fehlt вЂ” Browser kann HTTP-Verbindungen fallback (Art. 32 DSGVO)"
+                "HSTS fehlt — Browser kann HTTP-Verbindungen fallback (Art. 32 DSGVO)"
             )
 
         result["passed"] = len(issues) == 0

@@ -13,7 +13,7 @@ NIS2_STANDARD_TASKS = [
     ("Technisch", "TLS/SSL Konfiguration",
      "TLS 1.2/1.3, keine veralteten Protokolle (SSLv3/TLS1.0/1.1), starke Cipher-Suites, gültiges Zertifikat, HSTS",
      "§30 Abs. 2 Nr. 3 BSIG", "Art. 32 Abs. 1 DSGVO", 1),
-    ("Technisch", "Penetrationstest (OWASP Top 10)",
+    ("Technisch", "Web-Security-Check (OWASP Top 10)",
      "SQL-Injection, XSS, CSRF, IDOR, Broken Authentication, Security Misconfiguration, Sensitive Data Exposure",
      "§30 Abs. 2 Nr. 3 BSIG", "Art. 32 DSGVO", 1),
     ("Technisch", "Schwachstellen-Scan (CVE / Nuclei)",

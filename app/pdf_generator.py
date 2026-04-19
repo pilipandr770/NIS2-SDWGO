@@ -110,8 +110,28 @@ def generate_angebot_pdf(out_path, client, target, amount, scope, angebot_num):
     now    = today.strftime("%d.%m.%Y")
     valid  = (today + timedelta(days=30)).strftime("%d.%m.%Y")
 
+    # MwSt calculation — treat amount as Brutto (inkl. 19% MwSt)
+    try:
+        brutto = float(str(amount).replace(",", ".").replace(" ", ""))
+    except (ValueError, TypeError):
+        brutto = 0.0
+    netto  = round(brutto / 1.19, 2)
+    mwst   = round(brutto - netto, 2)
+    def _eur(v: float) -> str:
+        return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    mwst_table = (
+        f'<table style="margin-top:6px;width:auto;margin-left:auto">'
+        f'<tr><td style="text-align:right;font-size:11px;padding:3px 8px;border:none">Nettobetrag:</td>'
+        f'<td style="font-size:11px;padding:3px 8px;width:140px;border:none">{_eur(netto)} EUR</td></tr>'
+        f'<tr><td style="text-align:right;font-size:11px;padding:3px 8px;border:none">zzgl. 19% MwSt.:</td>'
+        f'<td style="font-size:11px;padding:3px 8px;border:none">{_eur(mwst)} EUR</td></tr>'
+        f'<tr style="border-top:2px solid #1a1a2e"><td style="text-align:right;font-weight:700;font-size:13px;padding:5px 8px;border:none">Bruttobetrag:</td>'
+        f'<td style="font-weight:700;font-size:15px;color:#e94560;padding:5px 8px;border:none">{_eur(brutto)} EUR</td></tr>'
+        f'</table>'
+    )
+
     services = [
-        ("Penetrationstest (Blackbox)","OWASP Top 10, SQL-Injection, XSS, CSRF, Directory Traversal, Broken Authentication","3–5 Werktage"),
+        ("Automatisierter Web-Security-Check (Blackbox)","OWASP Top 10, SQL-Injection, XSS, CSRF, Directory Traversal, Broken Authentication | KI-gestützt + manuelle Expertenprüfung","3–5 Werktage"),
         ("TLS/SSL-Sicherheitsanalyse","Protokollversionen, Cipher-Suites, Zertifikatsvalidierung, HSTS","Nach Auftrag"),
         ("HTTP Security-Header-Audit","CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, CORP/COOP","Nach Auftrag"),
         ("DSGVO & NIS2 Compliance","Art. 5/25/32/33 DSGVO · §25 TTDSG · NIS2/§30 BSIG · Bußgeldrisiko-Bewertung","Nach Auftrag"),
@@ -130,9 +150,9 @@ def generate_angebot_pdf(out_path, client, target, amount, scope, angebot_num):
 </div>
 <div class="cover">
   <div class="cover-logo">{esc(COMPANY)}</div>
-  <div class="cover-sub">IT-Sicherheitsdienstleistungen · Penetration Testing · DSGVO / NIS2 Compliance</div>
+  <div class="cover-sub">IT-Sicherheitsdienstleistungen · Web-Security-Assessment · DSGVO / NIS2 Compliance</div>
   <h1>Angebot</h1>
-  <p style="font-size:13px;color:#a8b2d8;margin-bottom:22px">Cybersicherheitsdienstleistungen &amp; Penetrationstest</p>
+  <p style="font-size:13px;color:#a8b2d8;margin-bottom:22px">IT-Sicherheitsdienstleistungen &amp; Web-Security-Assessment</p>
   <div class="cover-box"><div class="lbl">Angebotsnummer</div><div class="val">{esc(angebot_num)}</div></div>
   <div class="cover-box"><div class="lbl">Datum</div><div class="val">{now}</div></div>
   <div class="cover-box"><div class="lbl">Gültig bis</div><div class="val">{valid}</div></div>
@@ -141,7 +161,7 @@ def generate_angebot_pdf(out_path, client, target, amount, scope, angebot_num):
   <b>Prüfungsziel:</b> {esc(target)}<br><br>
   <b>Anbieter:</b> {esc(COMPANY)} · {esc(ADDRESS)}<br>
   {esc(EMAIL)} · {esc(PHONE)} · {esc(UST_ID)}</div>
-  <div class="cover-amount">AUFTRAGSSUMME: {esc(amount)} EUR</div>
+  <div class="cover-amount">AUFTRAGSSUMME: {_eur(brutto)} EUR</div>
   <div style="margin-top:12px">
     <span class="cbadge">✓ NIS2 / §30 BSIG</span>
     <span class="cbadge">✓ DSGVO Art. 32</span>
@@ -156,10 +176,7 @@ def generate_angebot_pdf(out_path, client, target, amount, scope, angebot_num):
 <h2>Leistungsumfang</h2>
 <table><thead><tr><th style="width:4%">#</th><th>Leistung</th><th style="width:14%">Liefertermin</th></tr></thead>
 <tbody>{rows}</tbody></table>
-<table style="margin-top:6px"><tr>
-<td style="text-align:right;font-weight:700;font-size:13px;border:none">Gesamtbetrag (inkl. MwSt.):</td>
-<td style="font-weight:700;font-size:15px;color:#e94560;width:160px;border:none">{esc(amount)} EUR</td>
-</tr></table>
+{mwst_table}
 <h2>Bedingungen</h2>
 <table class="info-table">
 <tr><td>Zahlungsbedingungen</td><td>50% Anzahlung bei Auftragserteilung, 50% nach Berichtsübergabe</td></tr>
@@ -254,6 +271,272 @@ def _build_protocol_rows(tools_used: dict, logs: list, target: str) -> str:
     return rows or '<tr><td colspan="6" style="text-align:center;color:#888">Keine Tool-Protokolldaten verfügbar — Bericht ohne KI-Audit generiert</td></tr>'
 
 
+# ── Header keyword map for cross-validation ───────────────────────────────────
+_HEADER_KEYWORD_MAP = {
+    "content-security-policy":      ["content-security-policy", "csp"],
+    "x-frame-options":              ["x-frame-options", "x-frame", "clickjacking"],
+    "x-content-type-options":       ["x-content-type-options", "x-content-type", "mime-sniffing", "mime sniffing"],
+    "referrer-policy":              ["referrer-policy", "referrer policy"],
+    "permissions-policy":           ["permissions-policy", "permissions policy", "feature-policy"],
+    "strict-transport-security":    ["strict-transport-security", "hsts"],
+    "cross-origin-opener-policy":   ["cross-origin-opener-policy", "coop"],
+    "cross-origin-resource-policy": ["cross-origin-resource-policy", "corp"],
+}
+_MISSING_PATTERNS = [
+    "fehlt vollständig", "fehlt", "nicht konfiguriert", "nicht gesetzt",
+    "nicht vorhanden", "fehlen", "missing", "absent",
+]
+
+
+def _cross_validate_findings(findings: list, live: dict) -> list:
+    """
+    Cross-check scanner findings against authoritative live-check results.
+    If a finding claims a header is 'missing' but live-check shows it IS present,
+    downgrade the finding to INFO (scanner artefact, e.g. Nikto behind Cloudflare).
+    If present but weak (e.g. CSP with unsafe-inline), keep the finding but correct
+    the title from 'fehlt' to 'schwach konfiguriert'.
+    """
+    # Build {header_key: {"present": bool, "good": bool, "value": str}}
+    live_headers = {}
+    for h in live.get("headers", []):
+        key = h.get("key", "").lower()
+        live_headers[key] = {
+            "present": bool(h.get("value", "")),
+            "good":    h.get("good", False),
+            "value":   (h.get("value", "") or "")[:120],
+        }
+
+    validated = []
+    for f in findings:
+        f_text = (f.get("title", "") + " " + f.get("description", "")).lower()
+
+        # Only apply cross-validation to findings that claim something is missing
+        claims_missing = any(pat in f_text for pat in _MISSING_PATTERNS)
+        if not claims_missing:
+            validated.append(f)
+            continue
+
+        # Identify which header this finding targets
+        targeted_header = None
+        for hdr_key, keywords in _HEADER_KEYWORD_MAP.items():
+            if any(kw in f_text for kw in keywords):
+                targeted_header = hdr_key
+                break
+
+        if targeted_header is None:
+            validated.append(f)
+            continue
+
+        live_status = live_headers.get(targeted_header)
+        if not live_status or not live_status["present"]:
+            # Header genuinely absent in live-check too → keep finding as-is
+            validated.append(f)
+            continue
+
+        # Header IS present in live-check — scanner reported false positive
+        f = dict(f)  # mutable copy
+        note = (f"[Live-Check: Header '{targeted_header}' ist konfiguriert "
+                f"(Wert: {live_status['value'][:60]}). "
+                "Befund möglicherweise Scan-Artefakt durch CDN/Reverse-Proxy (z. B. Cloudflare). "
+                "Live-Check-Ergebnisse in Abschnitt 3 sind maßgeblich.]")
+
+        if live_status["good"]:
+            # Header is present AND correct → downgrade to info
+            f["severity"] = "info"
+            f["cvss"]     = ""
+            f["description"] = f.get("description", "") + " " + note
+        else:
+            # Header present but weak (e.g. CSP with unsafe-inline) → keep severity, fix title
+            f["description"] = f.get("description", "") + " " + note
+            title = f.get("title", "")
+            for bad_phrase in ["fehlt vollständig", "fehlt", "nicht konfiguriert", "nicht gesetzt"]:
+                if bad_phrase in title.lower():
+                    # Replace in a case-insensitive way
+                    import re as _re
+                    f["title"] = _re.sub(
+                        _re.escape(bad_phrase), "schwach konfiguriert",
+                        title, flags=_re.IGNORECASE, count=1
+                    )
+                    break
+
+        validated.append(f)
+    return validated
+
+
+def _fix_dns_contradictions(findings: list, live: dict) -> list:
+    """Detect positive-claim findings that contradict authoritative live-check data.
+
+    Handles:
+    - Agent claims DNSSEC activated → but live-check DNS says DNSSEC not working
+    - Agent claims HSTS correctly implemented → but live-check says HSTS is weak/absent
+    Uses regex so phrases like 'DNSSEC erfolgreich aktiviert' are caught.
+    """
+    import re as _re
+
+    dns = live.get("dns", {})
+
+    # Build header status from live-check
+    live_headers: dict = {}
+    for h in live.get("headers", []):
+        key = h.get("key", "").lower()
+        live_headers[key] = {
+            "present": bool(h.get("value", "")),
+            "good":    h.get("good", False),
+            "value":   (h.get("value", "") or "")[:120],
+        }
+
+    # Regex patterns for positive claims
+    _POSITIVE_WORDS = r"(erfolgreich|aktiviert|enabled|implementiert|konfiguriert|vorhanden|gesetzt|ok\b|aktiv\b|korrekt)"
+    _RE_DNSSEC_POS  = _re.compile(r"dnssec\b.{0,60}" + _POSITIVE_WORDS, _re.I)
+    _RE_HSTS_POS    = _re.compile(r"hsts\b.{0,60}"   + _POSITIVE_WORDS, _re.I)
+
+    result = []
+    for f in findings:
+        f_text = (f.get("title", "") + " " + f.get("description", "")).lower()
+        f = dict(f)  # mutable copy
+
+        # DNSSEC: agent claims activated, but live-check says NOT ────────────
+        if _RE_DNSSEC_POS.search(f_text) and not dns.get("dnssec_ok"):
+            f["description"] = (
+                f.get("description", "") +
+                " [Widerspruch: Live-Check DNS-Prüfung konnte DNSSEC NICHT bestätigen"
+                " (kein DS/DNSKEY-Record verifiziert). Positive DNSSEC-Aussage ist"
+                " möglicherweise falsch positiv. Maßgeblich ist Abschnitt 3"
+                " (DNS-Sicherheitstabelle). Bitte manuell verifizieren.]"
+            )
+            f["severity"] = "info"
+            f["cvss"] = ""
+            # Strip "Positiv:" prefix and replace any positive verb
+            title = f.get("title", "")
+            import re as _re2
+            title = _re2.sub(r'^positiv:\s*', '', title, flags=_re2.IGNORECASE).strip()
+            for pos_word in ["erfolgreich implementiert", "erfolgreich aktiviert",
+                             "erfolgreich konfiguriert", "implementiert",
+                             "aktiviert", "enabled"]:
+                if pos_word in title.lower():
+                    title = _re2.sub(
+                        _re2.escape(pos_word),
+                        "nicht verifizierbar (Live-Check widerspricht)",
+                        title, flags=_re2.IGNORECASE, count=1
+                    )
+                    break
+            f["title"] = title
+
+        # ── HSTS: agent claims correct, but live-check says weak/absent ────────
+        hsts_live = live_headers.get("strict-transport-security", {})
+        if (_RE_HSTS_POS.search(f_text) and
+                hsts_live.get("present") and not hsts_live.get("good")):
+            val = hsts_live.get("value", "")
+            f["description"] = (
+                f.get("description", "") +
+                f" [Widerspruch: HSTS ist vorhanden (Wert: {val[:60]}),"
+                " aber max-age liegt unter dem empfohlenen Minimum"
+                " (NIS2-Empfehlung: ≥ 31536000 s / 1 Jahr)."
+                " Live-Check markiert diesen Header als schwach (Abschnitt 3).]"
+            )
+            f["severity"] = "low"
+            # Correct the title
+            title_h = f.get("title", "")
+            for pos_phrase in ["erfolgreich implementiert", "erfolgreich aktiviert",
+                                "korrekt konfiguriert", "implementiert", "aktiviert"]:
+                if pos_phrase in title_h.lower():
+                    f["title"] = _re.sub(
+                        _re.escape(pos_phrase),
+                        "schwach konfiguriert (max-age zu kurz)",
+                        title_h, flags=_re.IGNORECASE, count=1
+                    )
+                    break
+
+        result.append(f)
+    return result
+
+
+# ────────────────────────────────────────────
+# Keywords specific enough not to match real scanner findings (e.g. "backup file exposed").
+_COMPLIANCE_HINT_KEYWORDS = [
+    "[compliance-hinweis]",
+    # Contractual / legal docs — invisible black-box
+    "auftragsverarbeitungsvertrag", "auftragsverarbeit",
+    "avv mit", "avv fehlt", "avv nicht", "kein avv", "fehlende avv",
+    # DSFA — INTERNAL document, not required public (Art. 35 DSGVO)
+    "dsfa", "dpia", "datenschutz-folgenabsch",
+    # SIEM — completely invisible externally
+    "siem fehlt", "kein siem", "keine siem", "siem nicht implementiert", "siem-implementierung",
+    # Backup strategy — internal process; avoid matching "backup file found" (nikto)
+    "backup-strategie", "keine backup-strategie", "backup fehlt", "fehlende backup-strategie",
+    # MFA — requires authenticated login to verify
+    "mfa fehlt", "keine mfa", "kein mfa", "fehlende mfa",
+    "multi-faktor fehlt", "fehlende multi-faktor", "kein multi-faktor",
+    "fehlende mfa", "kein multi-faktor-authentifizierung",
+    # Encryption at rest — not externally observable
+    "verschlüsselung ruhender daten", "data-at-rest verschlüssel",
+    # API security — requires authenticated/internal access
+    "api-sicherheit fehlt", "keine api-sicherheit", "api-dokumentat",
+    # Authentication mechanisms — requires authenticated test
+    "authentifizierungsmechanismus unklar", "unklare authentifizierungs",
+    # Incident Response — internal process
+    "incident-response fehlt", "kein incident response",
+    "fehlende incident", "irp fehlt", "ir-prozess fehlt",
+    # WAF ruleset — Cloudflare WAF exists but ruleset not externally verifiable
+    "waf-ruleset", "waf-konfiguration nicht", "waf regeln fehlen",
+    # Other internal compliance topics
+    "datenresidenz",
+]
+
+
+def _is_compliance_hint(f: dict) -> bool:
+    """Return True if this finding is a compliance hint (not directly confirmed by scanner).
+
+    Keywords ALWAYS win regardless of tool source or CVSS value, because the AI agent
+    sometimes assigns tool='live_check' and a fake CVSS to compliance topics.
+    The keywords are specific enough to avoid false matches on real scanner findings.
+    """
+    title    = f.get("title", "").lower()
+    desc     = f.get("description", "").lower()
+    combined = title + " " + desc
+
+    for kw in _COMPLIANCE_HINT_KEYWORDS:
+        if kw in combined:
+            return True
+    return False
+
+
+# Mapping from task-title substrings to finding-text keywords for conflict detection
+_TASK_CONFLICT_KEYWORDS: dict = {
+    "http security header": ["content-security-policy", "csp fehlt", "csp schwach", "hsts fehlt",
+                              "x-frame-options", "x-content-type", "referrer-policy",
+                              "permissions-policy", "security header fehlt"],
+    "tls": ["tls 1.0", "tls 1.1", "ssl 2", "ssl 3", "schwaches protokoll",
+            "cipher", "zertifikat abgelaufen"],
+    "mfa": ["mfa", "multi-faktor", "zwei-faktor", "2fa"],
+    "verschlüssel": ["verschlüsselung ruhender", "data-at-rest"],
+    "backup": ["backup", "datensicherung", "wiederherstellung"],
+    "siem": ["siem"],
+    "logging": ["siem", "log-management"],
+    "incident": ["incident response"],
+    "avv": ["avv", "auftragsverarbeit"],
+    "dsfa": ["dsfa", "dpia"],
+    "web-security": ["sql", "xss", "injection", "cve-"],
+    "schwachstellen": ["cve-", "exploit", "remote code"],
+    "cookie": ["cookie", "secure-flag", "httponly", "samesite"],
+    "port-scan": ["offener port", "sensitiver port", "mysql", "redis", "mongo", "rdp öffentlich"],
+    "zugriffsrecht": ["mfa", "authentifizierung", "zugriffskontroll"],
+}
+
+
+def _task_has_conflict(task: dict, tech_findings: list) -> bool:
+    """Return True if a completed task has a conflicting HIGH/CRITICAL technical finding."""
+    task_title = (task.get("title", "") or "").lower()
+    for key_pattern, finding_kws in _TASK_CONFLICT_KEYWORDS.items():
+        if key_pattern in task_title:
+            for f in tech_findings:
+                if f.get("severity", "").lower() in ("critical", "high"):
+                    f_text = (f.get("title", "") + " " + f.get("description", "")).lower()
+                    if any(kw in f_text for kw in finding_kws):
+                        return True
+    return False
+
+
 def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
     now     = datetime.now().strftime("%d.%m.%Y")
     company = order.get("company","")
@@ -287,9 +570,7 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
                 tool_name = msg[2:].split(" ")[0]
                 tools_used.setdefault(tool_name, {"start": ts, "end": "", "findings": 0})
             if lg.get("level") == "CMD" and msg.startswith("✓ "):
-                tool_name = msg[2:].split(" ")[0]
-                if tool_name in tools_used:
-                    tools_used[tool_name]["end"] = ts
+                tools_used[tool_name]["end"] = ts
 
     # ── Tasks summary (must come before findings sync and counts) ─────────────
     tasks = tasks or []
@@ -310,6 +591,28 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
         "isms":               ["isms", "managementsystem", "governance"],
     }
     findings = list(findings)   # mutable copy
+
+    # ── Cross-validate scanner findings against authoritative live-check ──────
+    # Must happen BEFORE checklist sync and count, so that false positives from
+    # Nikto/httpx (headers reported missing but actually present via live-check)
+    # are downgraded to INFO and don't contaminate the compliance analysis.
+    findings = _cross_validate_findings(findings, live)
+    findings = _fix_dns_contradictions(findings, live)
+    if live.get("fetch_error"):
+        _HDR_KWORDS = ["header", "csp", "hsts", "x-frame", "x-content",
+                       "referrer-policy", "permissions-policy", "clickjacking",
+                       "strict-transport"]
+        _lc_note = (" [Hinweis: Live-Check schlug fehl (Timeout/Verbindungsfehler) —"
+                    " dieser Header-Befund stammt ausschließlich aus automatisiertem Scanner"
+                    " (Nikto/httpx) und konnte nicht per Live-Check validiert werden."
+                    " Manuelle Verifikation empfohlen vor Aufnahme in behördlichen Nachweis.]")
+        for i, f in enumerate(findings):
+            f_text = (f.get("title", "") + " " + f.get("description", "")).lower()
+            if any(kw in f_text for kw in _HDR_KWORDS):
+                f = dict(f)
+                f["description"] = f.get("description", "") + _lc_note
+                findings[i] = f
+
     for i, f in enumerate(findings):
         sev = f.get("severity","info").lower()
         if sev not in ("medium", "low"):
@@ -370,6 +673,17 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
             counts["low"] = counts.get("low", 0) + 1
             total = sum(counts.values())
 
+    # ── Split findings: scanner-confirmed (technical) vs compliance hints ──────
+    tech_findings = [f for f in findings if not _is_compliance_hint(f)]
+    comp_findings = [f for f in findings if _is_compliance_hint(f)]
+
+    # ── Recompute compliance % now that tech_findings is known ────────────────
+    # Tasks marked ✓ done but with a conflicting HIGH/CRITICAL technical finding
+    # show as ⚠ Nachweis ausstehend and must NOT count toward the percentage.
+    _tasks_with_conflict = [t for t in tasks_done if _task_has_conflict(t, tech_findings)]
+    tasks_verified = len(tasks_done) - len(_tasks_with_conflict)
+    tasks_pct = int(tasks_verified / tasks_total * 100) if tasks_total else 0
+
     # Build tasks HTML by category
     tasks_html = ""
     if tasks:
@@ -388,8 +702,16 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
             for t in cat_tasks:
                 idx += 1
                 done = t.get("done")
-                st_cls = "ok" if done else "fail"
-                st_txt = "✓ Erledigt" if done else "✗ Offen"
+                has_conflict = done and _task_has_conflict(t, tech_findings)
+                if has_conflict:
+                    st_cls = "warn"
+                    st_txt = "⚠ Nachweis ausstehend"
+                elif done:
+                    st_cls = "ok"
+                    st_txt = "✓ Erledigt"
+                else:
+                    st_cls = "fail"
+                    st_txt = "✗ Offen"
                 done_at = f'<br><span style="font-size:8px;color:#888">{esc(str(t.get("done_at",""))[:16])}</span>' if done and t.get("done_at") else ""
                 notes_row = f'<br><span style="font-size:8px;color:#555">📝 {esc(t["notes"])}</span>' if t.get("notes") else ""
                 req = '<span style="font-size:8px;color:#dc2626;font-weight:700"> *</span>' if t.get("required") else ""
@@ -404,7 +726,18 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
         if tasks_open:
             tasks_html += f'<div class="warn-box">⚠ <b>{len(tasks_open)} Aufgabe(n) noch offen</b> — vor Vorlage beim Regulator abschließen!</div>'
         else:
-            tasks_html += '<div class="green-box">✓ Alle Compliance-Aufgaben abgeschlossen — bereit für behördliche Prüfung.</div>'
+            # Only block sign-off if there are HIGH/CRITICAL *confirmed scanner* findings
+            _tech_crit = sum(1 for f in tech_findings if f.get("severity","").lower() == "critical")
+            _tech_high = sum(1 for f in tech_findings if f.get("severity","").lower() == "high")
+            _blocking = _tech_crit + _tech_high
+            if _blocking > 0:
+                tasks_html += (
+                    f'<div class="warn-box">⚠ Alle Compliance-Checklisten-Aufgaben abgeschlossen, jedoch bestehen noch '
+                    f'<b>{_tech_crit} kritische(r) / {_tech_high} hohe(r) technische Sicherheitsbefunde (durch Scanner bestätigt)</b>. '
+                    f'Diese müssen vor der behördlichen Einreichung behoben werden.</div>'
+                )
+            else:
+                tasks_html += '<div class="green-box">✓ Alle Compliance-Aufgaben abgeschlossen.</div>'
     else:
         tasks_html = '<div class="warn-box">Keine Aufgaben erfasst.</div>'
 
@@ -423,35 +756,58 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
         f'<div class="stat-cell"><span class="stat-num" style="color:{c}">{counts[s]}</span>{s.upper()}</div>'
         for s,c in cols.items()) + "</div>"
 
-    # Findings
-    ftable = fdetail = ""
-    if findings:
-        ftable = '<table><thead><tr><th>#</th><th>Bezeichnung</th><th>Schweregrad</th><th>CVSS</th><th>DSGVO</th></tr></thead><tbody>'
-        for i,f in enumerate(findings,1):
-            sev = f.get("severity","info")
-            cvss_disp = f.get("cvss","") or ("" if sev == "info" else "N/A (Compliance-Befund)")
-            ftable += f'<tr><td>{i}</td><td>{esc(f.get("title",""))}</td><td><span class="badge badge-{sev}">{sev.upper()}</span></td><td>{esc(cvss_disp) or "—"}</td><td style="font-size:9px">{esc(f.get("dsgvo_article","—"))}</td></tr>'
-        ftable += "</tbody></table>"
-        for f in findings:
-            sev = f.get("severity","info").lower()
-            cvss_disp = f.get("cvss","") or ("" if sev == "info" else "N/A (Compliance-Befund)")
-            tool_src  = f.get("tool","")
-            TOOL_LABELS = {
-                "nmap": "Nmap (Port-Scan)", "nuclei": "Nuclei (CVE-Scan)",
-                "httpx": "httpx (HTTP-Probe)", "testssl": "testssl.sh (TLS-Analyse)",
-                "nikto": "Nikto (Web-Scan)", "dns_audit": "DNS Audit (dig)",
-                "subfinder": "Subfinder (Subdomain-Enum)", "cookie_check": "Cookie-Check",
-                "live_check": "Live-Check (intern)",
-            }
-            tool_label = TOOL_LABELS.get(tool_src, tool_src.replace("_"," ").title()) if tool_src else "KI-Analyse / Live-Check"
-            fdetail += (f'<div class="finding {sev}">'
-                        f'<div class="finding-title">[{sev.upper()}] {esc(f.get("title",""))}</div>'
-                        f'<div class="finding-meta">Ziel: {esc(f.get("target","—"))} · CVSS: {esc(cvss_disp) or "—"} · {esc(f.get("dsgvo_article",""))} · <b>Erkannt durch:</b> {esc(tool_label)}</div>'
-                        f'<p style="font-size:10px;margin:3px 0"><b>Beschreibung:</b> {esc(f.get("description",""))}</p>'
-                        f'<p style="font-size:10px;margin:3px 0"><b>Empfehlung:</b> {esc(f.get("recommendation",""))}</p>'
-                        f'</div>')
+    # Findings — split into technical (scanner-confirmed) and compliance-hint blocks
+    _TOOL_LABELS = {
+        "nmap": "Nmap (Port-Scan)", "nuclei": "Nuclei (CVE-Scan)",
+        "httpx": "httpx (HTTP-Probe)", "testssl": "testssl.sh (TLS-Analyse)",
+        "nikto": "Nikto (Web-Scan)", "dns_audit": "DNS Audit (dig)",
+        "subfinder": "Subfinder (Subdomain-Enum)", "cookie_check": "Cookie-Check",
+        "live_check": "Live-Check (intern)",
+    }
+
+    def _render_ftable(flist, offset=0):
+        if not flist:
+            return ""
+        t = '<table><thead><tr><th>#</th><th>Bezeichnung</th><th>Schweregrad</th><th>CVSS</th><th>DSGVO</th></tr></thead><tbody>'
+        for i, f in enumerate(flist, 1 + offset):
+            sev = f.get("severity", "info")
+            cvss_disp = (f.get("cvss", "") or "").strip() or "—"
+            t += (f'<tr><td>{i}</td><td>{esc(f.get("title",""))}</td>'
+                  f'<td><span class="badge badge-{sev}">{sev.upper()}</span></td>'
+                  f'<td>{esc(cvss_disp)}</td>'
+                  f'<td style="font-size:9px">{esc(f.get("dsgvo_article","—"))}</td></tr>')
+        t += "</tbody></table>"
+        return t
+
+    def _render_fdetail(flist):
+        out = ""
+        for f in flist:
+            sev = f.get("severity", "info").lower()
+            cvss_disp = (f.get("cvss", "") or "").strip() or "—"
+            tool_src  = f.get("tool", "")
+            tool_label = _TOOL_LABELS.get(tool_src, tool_src.replace("_", " ").title()) if tool_src else "KI-Analyse / Live-Check"
+            out += (f'<div class="finding {sev}">'
+                    f'<div class="finding-title">[{sev.upper()}] {esc(f.get("title",""))}</div>'
+                    f'<div class="finding-meta">Ziel: {esc(f.get("target","—"))} · CVSS: {esc(cvss_disp)} · '
+                    f'{esc(f.get("dsgvo_article",""))} · <b>Erkannt durch:</b> {esc(tool_label)}</div>'
+                    f'<p style="font-size:10px;margin:3px 0"><b>Beschreibung:</b> {esc(f.get("description",""))}</p>'
+                    f'<p style="font-size:10px;margin:3px 0"><b>Empfehlung:</b> {esc(f.get("recommendation",""))}</p>'
+                    f'</div>')
+        return out
+
+    if tech_findings:
+        ftable_tech  = _render_ftable(tech_findings)
+        fdetail_tech = _render_fdetail(tech_findings)
     else:
-        ftable = '<div class="green-box">✓ Keine Schwachstellen gefunden — Automatisierte Prüfung ergab keine sicherheitsrelevanten Befunde.</div>'
+        ftable_tech  = '<div class="green-box">✓ Keine technischen Schwachstellen gefunden — Scan ergab keine durch Tools bestätigten Sicherheitsmängel.</div>'
+        fdetail_tech = ""
+
+    if comp_findings:
+        ftable_comp  = _render_ftable(comp_findings, offset=len(tech_findings))
+        fdetail_comp = _render_fdetail(comp_findings)
+    else:
+        ftable_comp  = '<p style="font-size:10px;color:#888">Keine Compliance-Hinweise erfasst.</p>'
+        fdetail_comp = ""
 
     # Live check — TLS, Security Headers, Cookie, DNS sections
     if live.get("fetch_error"):
@@ -524,7 +880,7 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
         elif live.get("passed"):
             live_html += '<div class="green-box">✓ Alle Security-Header korrekt konfiguriert (Art. 32 DSGVO)</div>'
 
-    art32_html = (f'<p class="fail">✗ {len(art32_issues)} Verstoß/-verstöße</p><div class="warn-box"><b>Live-Prüfung Mängel:</b><ul style="margin:4px 0 0 14px">' +
+    art32_html = (f'<p class="fail">✕ {len(art32_issues)} Risikohinweis(e) / potenzielle Abweichung(en)</p><div class="warn-box"><b>Live-Prüfung Mängel:</b><ul style="margin:4px 0 0 14px">' +
                   "".join(f'<li>{esc(i.get("note","") or i.get("name",""))}</li>' for i in art32_issues if i.get("note") or i.get("name")) +
                   "</ul></div>") if art32_issues else '<p class="ok">✓ Konform</p>'
 
@@ -541,9 +897,9 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
     # Art. 5 §1f — Integrity & Confidentiality: header failures, TLS issues, general
     art5_findings = _findings_for(["art. 5", "art.5", "§30"])
     if not art5_findings:
-        art5_html = '<p class="ok">✓ Konform — keine technischen Verstöße festgestellt</p>'
+        art5_html = '<p class="ok">✓ Keine technischen Risikohinweise festgestellt</p>'
     else:
-        art5_html = (f'<p class="fail">✗ {len(art5_findings)} Verstoß/-verstöße festgestellt</p>'
+        art5_html = (f'<p class="fail">✕ {len(art5_findings)} potenzielle(r) Risikohinweis(e) / Abweichung(en)</p>'
                      f'<ul style="margin:4px 0 0 14px;font-size:10px">'
                      + "".join(f'<li>[{f.get("severity","").upper()}] {esc(f.get("title",""))}</li>' for f in art5_findings)
                      + '</ul>')
@@ -556,9 +912,14 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
         art25_html = '<p class="ok">✓ Konform</p>'
     else:
         items_25 = [f'[{f.get("severity","").upper()}] {esc(f.get("title",""))}' for f in art25_findings]
-        if not permissions_ok:
+        # Only add extra bullet if not already covered by an existing Art.25 finding
+        _perm_covered = any("permissions" in (f.get("title","") + f.get("description","")).lower()
+                            for f in art25_findings)
+        if not permissions_ok and not _perm_covered:
             items_25.append("Permissions-Policy fehlt (Browser-Feature-Kontrolle)")
-        if cookie_issues:
+        _cookie_covered = any("cookie" in (f.get("title","") + f.get("description","")).lower()
+                              for f in art25_findings)
+        if cookie_issues and not _cookie_covered:
             items_25.append(f"{len(cookie_issues)} Cookie(s) ohne Sicherheits-Flags")
         art25_html = (f'<p class="fail">✗ {len(items_25)} Mängel</p>'
                       f'<ul style="margin:4px 0 0 14px;font-size:10px">'
@@ -568,20 +929,20 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
     # Art. 32 — Technical & Organisational Measures: security headers, TLS, everything
     art32_findings = _findings_for(["art. 32", "art.32"])
     if not art32_findings:
-        art32_html = '<p class="ok">✓ Konform — keine technischen TOMs-Verstöße festgestellt</p>'
+        art32_html = '<p class="ok">✓ Keine technischen TOM-Mängel festgestellt</p>'
     else:
-        art32_html = (f'<p class="fail">✗ {len(art32_findings)} Verstoß/-verstöße</p>'
+        art32_html = (f'<p class="fail">✕ {len(art32_findings)} potenzielle(r) Risikohinweis(e) / Abweichung(en)</p>'
                       f'<ul style="margin:4px 0 0 14px;font-size:10px">'
                       + "".join(f'<li>[{f.get("severity","").upper()}] {esc(f.get("title",""))}'
                                 f'<span style="color:#888;font-size:9px"> — CVSS: {esc(f.get("cvss","") or "N/A")}</span></li>'
                                 for f in art32_findings)
                       + '</ul>')
 
-    # §25 TTDSG — Cookie Consent
-    ttdsg_html = ('<p class="ok">✓ Keine Cookie-Probleme festgestellt</p>'
-                  if not cookie_issues
-                  else f'<p class="warn">⚠ {len(cookie_issues)} Cookie(s) ohne korrekte Flags — '
-                       f'Cookie-Consent-Banner prüfen (§25 TTDSG)</p>')
+    # §25 TTDSG — Cookie Consent (based purely on live-check cookie data)
+    ttdsg_html = (f'<p class="warn">⚠ {len(cookie_issues)} Cookie(s) ohne korrekte Flags — '
+                  f'Cookie-Consent-Banner prüfen (§25 TTDSG)</p>'
+                  if cookie_issues
+                  else '<p class="ok">✓ Keine Cookie-Probleme festgestellt</p>')
 
     # ── Dynamic recommendations from actual findings ───────────────────────────
     crit_findings = [f for f in findings if f.get("severity") == "critical"]
@@ -607,11 +968,15 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
         tech_med = [f for f in med_findings if f.get("cvss","") and f.get("cvss","") != "N/A (Compliance-Befund)"]
         comp_med = [f for f in med_findings if not f.get("cvss","") or f.get("cvss","") == "N/A (Compliance-Befund)"]
         if tech_med:
-            rec_rows += f'<tr><td>1 Monat</td><td>{len(tech_med)} technische Schwachstelle(n) beheben: {esc("; ".join(f.get("title","") for f in tech_med[:2]))}. Patch-Management überprüfen.</td><td><span class="badge badge-medium">MITTEL</span></td><td>+30 Tage</td></tr>'
+            _tech_titles = "; ".join(t for f in tech_med if (t := f.get("title", "").strip()))
+            rec_rows += (f'<tr><td>1 Monat</td><td>{len(tech_med)} technische Schwachstelle(n) beheben: '
+                         f'{esc(_tech_titles)}. '
+                         f'Patch-Management überprüfen.</td>'
+                         f'<td><span class="badge badge-medium">MITTEL</span></td><td>+30 Tage</td></tr>')
         if comp_med:
             rec_rows += f'<tr><td>1 Monat</td><td>{len(comp_med)} Compliance-Lücke(n) dokumentieren: {esc("; ".join(f.get("title","") for f in comp_med[:2]))}. Interne Dokumentation erstellen und dem Prüfer vorlegen.</td><td><span class="badge badge-medium">MITTEL</span></td><td>+30 Tage</td></tr>'
     rec_rows += '<tr><td>3 Monate</td><td>SRI für CDN. MFA auf allen Zugängen. DSFA aktualisieren. Offene Compliance-Aufgaben schließen.</td><td><span class="badge badge-low">NIEDRIG</span></td><td>+90 Tage</td></tr>'
-    rec_rows += '<tr><td>Jährlich</td><td>Pentest wiederholen. Security-Awareness-Training (§30 Abs.2 Nr.9 BSIG). Risikoanalyse aktualisieren.</td><td><span class="badge badge-info">GEPLANT</span></td><td>Laufend</td></tr>'
+    rec_rows += '<tr><td>Jährlich</td><td>Web-Security-Assessment wiederholen. Security-Awareness-Training (§30 Abs.2 Nr.9 BSIG). Risikoanalyse aktualisieren.</td><td><span class="badge badge-info">GEPLANT</span></td><td>Laufend</td></tr>'
 
     html = f"""<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Sicherheitsprüfungsbericht — {esc(company)}</title>{PRINT_CSS}</head><body>
 <div class="print-bar no-print">
@@ -622,11 +987,11 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
   <div class="cover-logo">{esc(COMPANY)}</div>
   <div class="cover-sub">IT-Sicherheitsdienstleistungen · {esc(WEBSITE)}</div>
   <h1>NIS2 / DSGVO Compliance-Bericht</h1>
-  <p style="font-size:13px;color:#a8b2d8;margin-bottom:10px">Penetration Testing &amp; Compliance-Analyse</p>
+  <p style="font-size:13px;color:#a8b2d8;margin-bottom:10px">Web-Security-Assessment &amp; Compliance-Analyse</p>
   <div class="cover-box"><div class="lbl">PRÜFUNGSZIEL</div><div class="val">{esc(target)}</div></div>
   <div class="cover-box"><div class="lbl">KUNDE</div><div class="val">{esc(company)}</div></div>
   <div class="cover-box"><div class="lbl">DATUM</div><div class="val">{now}</div></div>
-  <div class="cover-meta">Prüfer: {esc(FULL_NAME)}<br>{esc(ADDRESS)}<br>{esc(EMAIL)} · {esc(PHONE)}<br>{esc(UST_ID)}<br>Gesamtbefunde: <b>{total}</b> &nbsp;·&nbsp; Prüffortschritt: <b>{tasks_pct}%</b></div>
+  <div class="cover-meta">Prüfer: {esc(FULL_NAME)}<br>{esc(ADDRESS)}<br>{esc(EMAIL)} · {esc(PHONE)}<br>{esc(UST_ID)}<br>Gesamtbefunde: <b>{total}</b> &nbsp;·&nbsp; Scan: <b>{len(tools_used) or "—"}/8 Tools</b> &nbsp;·&nbsp; Compliance: <b>{tasks_pct}% ({tasks_verified}/{tasks_total})</b></div>
   <div style="margin-top:14px">
     <span class="cbadge">✓ NIS2 / §30 BSIG</span>
     <span class="cbadge">✓ DSGVO Art. 32</span>
@@ -643,7 +1008,8 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
 <tr><td>Prüfungsziel</td><td>{esc(target)}</td></tr>
 <tr><td>Prüfer</td><td>{esc(FULL_NAME)} · {esc(WEBSITE)}</td></tr>
 <tr><td>Prüfungsdatum</td><td>{now}</td></tr>
-<tr><td>Prüffortschritt</td><td><b style="color:{"#16a34a" if tasks_pct==100 else "#d97706"}">{tasks_pct}% ({len(tasks_done)}/{tasks_total} Aufgaben abgeschlossen)</b></td></tr>
+<tr><td>Scan-Status</td><td><b class="ok">✓ {len(tools_used) if tools_used else "—"} von 8 Tools durchgeführt</b></td></tr>
+<tr><td>Compliance-Checkliste</td><td><b style="color:{"#16a34a" if tasks_pct==100 else "#d97706"}">{tasks_pct}% ({tasks_verified}/{tasks_total} Aufgaben ohne kritische Befunde)</b></td></tr>
 <tr><td>Offene Befunde</td><td><b style="color:{"#dc2626" if (counts["critical"]+counts["high"]) > 0 else ("#d97706" if counts["medium"] > 0 else "#16a34a")}">{counts["critical"]+counts["high"]+counts["medium"]+counts["low"]} Befunde ({counts["critical"]} kritisch / {counts["high"]} hoch / {counts["medium"]} mittel / {counts["low"]} niedrig) · {counts["info"]} informativ</b></td></tr>
 </table>
 {stats_html}
@@ -689,7 +1055,11 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
 {live_html}
 
 <h2 class="pb">4. Sicherheitsbefunde</h2>
-{ftable}{fdetail}
+<h3>4a. Technische Befunde (Black-Box-Scan bestätigt, mit CVSS)</h3>
+{ftable_tech}{fdetail_tech}
+<h3 style="margin-top:20px">4b. Compliance-Hinweise (Dokumentationsbedarf, ohne CVSS)</h3>
+<div class="warn-box" style="font-size:9px;margin-bottom:8px">⚠ <b>Methodischer Hinweis:</b> Die nachfolgenden Punkte konnten im Rahmen des Black-Box-Audits nicht direkt bestätigt werden (interne Dokumentation, Interview mit Auftraggeber oder authentifizierter Zugang erforderlich). Eine CVSS-Bewertung ist für diese Punkte methodisch nicht zutreffend — sie sind gesondert von den technischen Befunden (4a) zu betrachten.</div>
+{ftable_comp}{fdetail_comp}
 
 <h2 class="pb">5. NIS2 / DSGVO Compliance-Checkliste</h2>
 <p style="font-size:9px;color:#666;margin-bottom:8px">Stand der Compliance-Prüfung zum {now}. Pflichtaufgaben gemäß §30 BSIG und DSGVO Art. 32.</p>
@@ -697,7 +1067,7 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
 {tasks_html}
 
 <h2 class="pb">6. DSGVO Compliance-Analyse</h2>
-<p style="font-size:9px;color:#666;margin-bottom:8px">Die nachfolgende Analyse basiert ausschließlich auf den in Abschnitt 4 dokumentierten Sicherheitsbefunden und ist damit vollständig konsistent mit den Prüfergebnissen.</p>
+<p style="font-size:9px;color:#666;margin-bottom:8px">Die nachfolgende Analyse basiert auf den in Abschnitt 3 (Live-Check) und Abschnitt 4 (Sicherheitsbefunde) dokumentierten Prüfergebnissen. Die angeführten Punkte sind Risikohinweise und potenzielle Abweichungen — keine behördlich festgestellten Verstöße. Nur die zuständige Aufsichtsbehörde (LfDI / BfDI) kann DSGVO-Verstöße rechtskräftig feststellen.</p>
 <h3>Art. 5 Abs. 1f DSGVO — Integrität und Vertraulichkeit</h3>{art5_html}
 <h3>Art. 25 DSGVO — Privacy by Design &amp; by Default</h3>{art25_html}
 <h3>Art. 32 DSGVO — Technische und organisatorische Maßnahmen (TOM)</h3>{art32_html}
@@ -708,7 +1078,7 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
 <table><thead><tr><th>Zeitraum</th><th>Maßnahme</th><th>Priorität</th><th>Retest</th></tr></thead><tbody>
 {rec_rows}
 </tbody></table>
-<div class="warn-box" style="margin-top:12px">⚖ <b>Geschätztes Bußgeldrisiko:</b><br>NIS2 §30 BSIG: bis 10.000.000 EUR oder 2% des weltweiten Jahresumsatzes<br>DSGVO Art. 83 Abs. 4: bis 10.000.000 EUR oder 2% (technische Verstöße)<br>DSGVO Art. 83 Abs. 5 (Art. 32): bis 20.000.000 EUR oder 4% des weltweiten Jahresumsatzes</div>
+<div class="warn-box" style="margin-top:12px">⚖ <b>Geschätztes Bußgeldrisiko:</b><br>NIS2 §30 BSIG: bis 10.000.000 EUR oder 2% des weltweiten Jahresumsatzes<br>DSGVO Art. 83 Abs. 4 (Art. 32 – Technische und organisatorische Maßnahmen): bis 10.000.000 EUR oder 2% des weltweiten Jahresumsatzes<br>DSGVO Art. 83 Abs. 5 (Art. 5, 6, 7, 9, 12–22 – Grundprinzipien / Betroffenenrechte): bis 20.000.000 EUR oder 4% des weltweiten Jahresumsatzes</div>
 
 <h2 class="pb">8. Prüfungsprotokoll (Nachweis durchgeführter Prüfschritte)</h2>
 <p style="font-size:9px;color:#666;margin-bottom:8px">Dieses Protokoll dokumentiert den Ablauf der Sicherheitsprüfung als Nachweis der erbrachten Leistung gem. DSGVO Art. 32 / §30 BSIG.</p>
