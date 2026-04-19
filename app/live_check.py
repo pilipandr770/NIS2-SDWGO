@@ -217,10 +217,11 @@ def _check_dns(hostname: str) -> dict:
     spf_raw   = _dig("TXT", domain)
     dmarc_raw = _dig("TXT", f"_dmarc.{domain}")
     dnskey    = _dig("DNSKEY", domain)
+    ds        = _dig("DS", domain)
 
     spf_ok    = "v=spf1" in spf_raw
     dmarc_ok  = "v=DMARC1" in dmarc_raw
-    dnssec_ok = bool(dnskey)
+    dnssec_ok = bool(dnskey or ds)
 
     dmarc_policy = ""
     if dmarc_ok:

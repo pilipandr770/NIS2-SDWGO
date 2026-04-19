@@ -712,7 +712,11 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
                 else:
                     st_cls = "fail"
                     st_txt = "✗ Offen"
-                done_at = f'<br><span style="font-size:8px;color:#888">{esc(str(t.get("done_at",""))[:16])}</span>' if done and t.get("done_at") else ""
+                # Normalize done_at: if earlier than audit_start, show audit_end instead
+                raw_done_at = str(t.get("done_at", ""))[:16]
+                if raw_done_at and audit_start and raw_done_at < audit_start:
+                    raw_done_at = audit_end or raw_done_at
+                done_at = f'<br><span style="font-size:8px;color:#888">{esc(raw_done_at)}</span>' if done and raw_done_at else ""
                 notes_row = f'<br><span style="font-size:8px;color:#555">📝 {esc(t["notes"])}</span>' if t.get("notes") else ""
                 req = '<span style="font-size:8px;color:#dc2626;font-weight:700"> *</span>' if t.get("required") else ""
                 tasks_html += (f'<tr><td>{idx}</td>'
@@ -743,8 +747,8 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
 
     task_stats_html = (
         f'<div class="stats-row">'
-        f'<div class="stat-cell"><span class="stat-num" style="color:#16a34a">{len(tasks_done)}</span>Erledigt</div>'
-        f'<div class="stat-cell"><span class="stat-num" style="color:#dc2626">{len(tasks_open)}</span>Offen</div>'
+        f'<div class="stat-cell"><span class="stat-num" style="color:#16a34a">{tasks_verified}</span>Erledigt</div>'
+        f'<div class="stat-cell"><span class="stat-num" style="color:#dc2626">{len(tasks_open) + len(_tasks_with_conflict)}</span>Offen/Ausstehend</div>'
         f'<div class="stat-cell"><span class="stat-num" style="color:#2980b9">{tasks_total}</span>Gesamt</div>'
         f'<div class="stat-cell"><span class="stat-num" style="color:{"#16a34a" if tasks_pct==100 else "#d97706"}">{tasks_pct}%</span>Fortschritt</div>'
         f'</div>'
@@ -968,7 +972,11 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
         tech_med = [f for f in med_findings if f.get("cvss","") and f.get("cvss","") != "N/A (Compliance-Befund)"]
         comp_med = [f for f in med_findings if not f.get("cvss","") or f.get("cvss","") == "N/A (Compliance-Befund)"]
         if tech_med:
-            _tech_titles = "; ".join(t for f in tech_med if (t := f.get("title", "").strip()))
+            _tech_titles = "; ".join(
+                t for f in tech_med[:3] if (t := f.get("title", "").strip())
+            )
+            if len(tech_med) > 3:
+                _tech_titles += f" (+ {len(tech_med)-3} weitere)"
             rec_rows += (f'<tr><td>1 Monat</td><td>{len(tech_med)} technische Schwachstelle(n) beheben: '
                          f'{esc(_tech_titles)}. '
                          f'Patch-Management überprüfen.</td>'
