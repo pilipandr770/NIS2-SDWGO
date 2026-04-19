@@ -489,8 +489,10 @@ def run_audit_agent(order_id: int, target: str, company: str):
                    (datetime.now().isoformat(), order_id))
         return
 
-    # Verify tool availability and log status
-    missing_tools = [t for t in TOOLS if not shutil.which(t.replace("_", "").replace("audit","")) and not shutil.which(t)]
+    # Verify tool availability — only check tools that are actual OS binaries
+    _BINARY_TOOLS = {"nmap", "nuclei", "httpx", "subfinder", "nikto"}
+    _SCRIPT_TOOLS  = {"dns_audit", "cookie_check", "testssl"}  # Python functions or sh wrappers
+    missing_tools = [t for t in _BINARY_TOOLS if not shutil.which(t)]
     if missing_tools:
         _log(order_id, "INFO", f"Hinweis — folgende Tools nicht im PATH: {', '.join(missing_tools)}")
 

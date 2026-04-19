@@ -1,4 +1,4 @@
-﻿"""
+"""
 Live Check — HTTP Security Headers, TLS/SSL, Cookie Flags, DNS (SPF/DMARC/DKIM)
 """
 import ssl
