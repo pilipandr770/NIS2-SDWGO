@@ -20,7 +20,7 @@ from models import db_execute, db_query
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MAX_ITERATIONS    = 30
-MODEL             = "claude-sonnet-4-5"   # cost-efficient vs Opus, still highly capable
+MODEL             = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
 
 def _log(order_id: int, level: str, message: str):

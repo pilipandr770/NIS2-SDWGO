@@ -17,11 +17,15 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 from models import init_db, migrate_db, db_query, db_execute, create_order_tasks
 from pdf_generator import generate_angebot_pdf, generate_report_pdf
-from live_check import fetch_live_check
+from live_check import fetch_live_check, is_public_target
 from agent import run_audit_agent
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
-app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+
+_secret = os.environ.get("SECRET_KEY")
+if not _secret:
+    raise RuntimeError("SECRET_KEY environment variable is required. Set it in .env or docker-compose.yml")
+app.secret_key = _secret
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -171,9 +175,10 @@ def new_angebot():
 
         # Генеруємо Angebot PDF
         angebot_num = f"ANG-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        pdf_name    = f"Angebot_{client['company'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.html"
+        pdf_name    = f"Angebot_{client['company'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
         pdf_path    = os.path.join(REPORTS_DIR, pdf_name)
-        generate_angebot_pdf(pdf_path, client, target, amount, scope, angebot_num)
+        actual_path = generate_angebot_pdf(pdf_path, client, target, amount, scope, angebot_num)
+        pdf_name    = os.path.basename(actual_path)
 
         # Зберігаємо заказ
         order_id = db_execute("""INSERT INTO orders
@@ -236,6 +241,10 @@ def start_audit(oid):
         return jsonify({"error": "not found"}), 404
     order = order[0]
 
+    if not is_public_target(order["target"]):
+        flash("Target muss eine öffentliche Internetadresse sein", "danger")
+        return redirect(url_for("order_detail", oid=oid))
+
     # Запускаємо аудит в окремому потоці
     job_id = str(uuid.uuid4())[:8]
     db_execute("UPDATE orders SET status='running',job_id=?,updated_at=? WHERE id=?",
@@ -269,9 +278,10 @@ def generate_report(oid):
     logs     = db_query("SELECT * FROM audit_logs WHERE order_id=? ORDER BY created_at ASC", (oid,))
     live     = fetch_live_check(order["target"])
 
-    pdf_name = f"Bericht_{order['company'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+    pdf_name = f"Bericht_{order['company'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf_path = os.path.join(REPORTS_DIR, pdf_name)
-    generate_report_pdf(pdf_path, order, findings, live, tasks, logs)
+    actual_path = generate_report_pdf(pdf_path, order, findings, live, tasks, logs)
+    pdf_name = os.path.basename(actual_path)
 
     db_execute("UPDATE orders SET report_pdf=?,status='completed',updated_at=? WHERE id=?",
                (pdf_name, datetime.now().isoformat(), oid))
@@ -306,19 +316,19 @@ def download(filename):
 # ── API: live check ───────────────────────────────────────────────────────────
 @app.route("/api/live-check")
 @login_required
-@csrf.exempt
 @limiter.limit("30 per minute")
 def api_live_check():
     target = request.args.get("target","")
     if not target:
         return jsonify({"error": "target required"}), 400
+    if not is_public_target(target):
+        return jsonify({"error": "target must be a public internet host"}), 400
     result = fetch_live_check(target)
     return jsonify(result)
 
 # ── API: findings ─────────────────────────────────────────────────────────────
 @app.route("/api/findings/<int:oid>", methods=["POST"])
 @login_required
-@csrf.exempt
 def add_finding(oid):
     data = request.json
     RANK = {"critical":1,"high":2,"medium":3,"low":4,"info":5}
@@ -334,7 +344,6 @@ def add_finding(oid):
 
 @app.route("/api/findings/<int:fid>", methods=["DELETE"])
 @login_required
-@csrf.exempt
 def delete_finding(fid):
     db_execute("DELETE FROM findings WHERE id=?", (fid,))
     return jsonify({"ok": True})
@@ -342,7 +351,6 @@ def delete_finding(fid):
 # ── API: tasks ────────────────────────────────────────────────────────────────
 @app.route("/api/tasks/<int:tid>/toggle", methods=["POST"])
 @login_required
-@csrf.exempt
 def toggle_task(tid):
     task = db_query("SELECT * FROM order_tasks WHERE id=?", (tid,))
     if not task:
@@ -354,7 +362,6 @@ def toggle_task(tid):
 
 @app.route("/api/tasks/<int:tid>/notes", methods=["POST"])
 @login_required
-@csrf.exempt
 def update_task_notes(tid):
     notes = (request.json or {}).get("notes", "")
     db_execute("UPDATE order_tasks SET notes=? WHERE id=?", (notes[:2000], tid))
@@ -363,7 +370,6 @@ def update_task_notes(tid):
 # ── API: audit log stream ─────────────────────────────────────────────────────
 @app.route("/api/logs/<int:oid>")
 @login_required
-@csrf.exempt
 def get_logs(oid):
     after = request.args.get("after", "0")
     rows  = db_query(

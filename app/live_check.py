@@ -3,11 +3,31 @@ Live Check — HTTP Security Headers, TLS/SSL, Cookie Flags, DNS (SPF/DMARC/DKIM
 """
 import ssl
 import socket
+import ipaddress
 import urllib.request
 import urllib.error
 import subprocess
 import shutil
 from datetime import datetime
+from urllib.parse import urlparse
+
+
+def is_public_target(target: str) -> bool:
+    """Return True only if *target* resolves to a public (non-private) IP.
+
+    Rejects loopback, private, link-local, and reserved addresses to prevent SSRF.
+    """
+    url = _normalize_url(target)
+    hostname = urlparse(url).hostname or target.split("/")[0]
+    try:
+        infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+    for family, _, _, _, sockaddr in infos:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return False
+    return True
 
 SECURITY_HEADERS = [
     {
@@ -343,10 +363,10 @@ def fetch_live_check(target: str) -> dict:
                 if "max-age=" not in val.lower():
                     good = False
                 else:
-                    # Check max-age value >= 15768000 (6 months)
+                    # Check max-age value >= 31536000 (12 months, NIS2 recommendation)
                     try:
                         ma = int(val.lower().split("max-age=")[1].split(";")[0].strip())
-                        if ma < 15768000:
+                        if ma < 31536000:
                             good = False
                     except Exception:
                         pass
