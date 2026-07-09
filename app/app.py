@@ -20,6 +20,7 @@ from pdf_generator import generate_angebot_pdf, generate_report_pdf
 from live_check import fetch_live_check, is_public_target
 from agent import run_audit_agent
 from kassen_check import run_kassen_check
+import lead_finder
 import mailer
 import payments
 
@@ -182,6 +183,104 @@ def edit_client(cid):
         flash("Kundendaten aktualisiert", "success")
         return redirect(url_for("client_detail", cid=cid))
     return render_template("client_form.html", client=client)
+
+# ── Lead-Finder (Kassensystem-Zielgruppe) ──────────────────────────────────────
+@app.route("/leads")
+@login_required
+def leads():
+    rows = db_query("SELECT * FROM leads ORDER BY created_at DESC")
+    return render_template("leads.html", leads=rows, search_status=lead_finder.get_status())
+
+@app.route("/leads/start", methods=["POST"])
+@login_required
+def start_leads_search():
+    branches = request.form.getlist("branche") or ["gastronomie"]
+    started = lead_finder.start_background_search(branches)
+    if started:
+        flash("Lead-Suche gestartet — läuft im Hintergrund bis zum Stopp", "success")
+    else:
+        flash("Es läuft bereits eine Suche", "danger")
+    return redirect(url_for("leads"))
+
+@app.route("/leads/stop", methods=["POST"])
+@login_required
+def stop_leads_search():
+    lead_finder.stop_background_search()
+    flash("Lead-Suche wird gestoppt …", "success")
+    return redirect(url_for("leads"))
+
+@app.route("/leads/status")
+@login_required
+def leads_status():
+    return jsonify(lead_finder.get_status())
+
+@app.route("/leads/<int:lid>/send", methods=["POST"])
+@login_required
+def send_lead_email(lid):
+    lead = db_query("SELECT * FROM leads WHERE id=?", (lid,))
+    if not lead:
+        return redirect(url_for("leads"))
+    lead = lead[0]
+    if not lead["email"]:
+        flash("Kein E-Mail-Kontakt für diesen Lead gefunden", "danger")
+        return redirect(url_for("leads"))
+
+    token = secrets.token_urlsafe(24)
+    subject, body = lead_finder.build_outreach_email(lead, token, payments.PUBLIC_BASE_URL)
+    try:
+        mailer.send_email(lead["email"], subject, body)
+        db_execute("UPDATE leads SET lead_token=?,status='emailed',emailed_at=? WHERE id=?",
+                   (token, datetime.now().isoformat(), lid))
+        flash(f"Einladung an {lead['email']} gesendet", "success")
+    except mailer.MailerNotConfigured as e:
+        flash(str(e), "danger")
+    except Exception as e:
+        flash(f"Versand fehlgeschlagen: {e}", "danger")
+    return redirect(url_for("leads"))
+
+@app.route("/lead/<token>", methods=["GET"])
+def lead_landing(token):
+    lead = db_query("SELECT * FROM leads WHERE lead_token=?", (token,))
+    if not lead:
+        abort(404)
+    return render_template("lead_landing.html", lead=lead[0])
+
+@app.route("/lead/<token>/confirm", methods=["POST"])
+def lead_confirm(token):
+    lead = db_query("SELECT * FROM leads WHERE lead_token=?", (token,))
+    if not lead:
+        abort(404)
+    lead = lead[0]
+
+    if not request.form.get("owner_confirmed"):
+        flash("Bitte bestätigen Sie, dass Sie zur Anforderung berechtigt sind.", "danger")
+        return redirect(url_for("lead_landing", token=token))
+
+    email = lead["email"] or f"lead-{lead['id']}@platzhalter.invalid"
+    client_row = db_query("SELECT id FROM clients WHERE email=?", (email,))
+    if client_row:
+        client_id = client_row[0]["id"]
+    else:
+        client_id = db_execute(
+            "INSERT INTO clients (company,contact,email,phone,address,notes,created_at) VALUES (?,?,?,?,?,?,?)",
+            (lead["company"], lead["contact"], email, lead["phone"], lead["address"],
+             "Angelegt über Lead-Finder (Kassensystem-Check)", datetime.now().isoformat()),
+        )
+
+    order_id = db_execute(
+        """INSERT INTO orders (client_id,target,amount,scope,notes,status,check_type,created_at,updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (client_id, lead["domain"], "0", "Kostenloser Kassensystem-Sicherheitscheck (Lead)",
+         f"Lead #{lead['id']} — Branche: {lead['branche']}", "confirmed", "kassen",
+         datetime.now().isoformat(), datetime.now().isoformat()),
+    )
+    create_order_tasks(order_id)
+
+    db_execute("UPDATE leads SET status='confirmed',responded_at=?,client_id=?,order_id=? WHERE id=?",
+               (datetime.now().isoformat(), client_id, order_id, lead["id"]))
+
+    _launch_check_for_order(order_id, "kassen", lead["domain"], lead["company"])
+    return render_template("lead_landing.html", lead=lead, confirmed=True)
 
 # ── Angebot ───────────────────────────────────────────────────────────────────
 @app.route("/angebot/new", methods=["GET","POST"])

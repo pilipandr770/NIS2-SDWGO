@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Leads{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Leads (Kassensystem-Zielgruppe)</h1>
+    <div class="sub">{{ leads|length }} Leads gesamt</div>
+  </div>
+</div>
+
+<div class="panel" style="margin-bottom:20px">
+  {% if search_status.running %}
+  <div id="search-status" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <span class="badge badge-running">läuft</span>
+    <span style="font-size:13px">
+      <span id="found-total">{{ search_status.found_total }}</span> neue Leads gefunden ·
+      aktuell: {{ search_status.current_branche or '…' }} / {{ search_status.current_city or '…' }}
+    </span>
+    <form method="post" action="{{ url_for('stop_leads_search') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm" style="background:var(--danger);color:#fff">Stoppen</button>
+    </form>
+  </div>
+  <script>
+    // Live-Aktualisierung des Zählers, ohne die Seite neu zu laden
+    (function poll() {
+      fetch("{{ url_for('leads_status') }}").then(r => r.json()).then(s => {
+        if (!s.running) { location.reload(); return; }
+        document.getElementById('found-total').textContent = s.found_total;
+        setTimeout(poll, 4000);
+      }).catch(() => setTimeout(poll, 8000));
+    })();
+  </script>
+  {% else %}
+  <form method="post" action="{{ url_for('start_leads_search') }}" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row" style="margin:0">
+      <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
+        <input type="checkbox" name="branche" value="gastronomie" checked> Gastronomie
+      </label>
+    </div>
+    <div class="form-row" style="margin:0">
+      <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
+        <input type="checkbox" name="branche" value="einzelhandel"> Einzelhandel
+      </label>
+    </div>
+    <button type="submit" class="btn btn-primary">Suche starten (läuft im Hintergrund)</button>
+  </form>
+  {% if search_status.last_error %}
+  <div class="alert alert-danger" style="margin-top:8px">Letzter Fehler: {{ search_status.last_error }}</div>
+  {% endif %}
+  {% endif %}
+  <p style="font-size:11px;color:var(--text3);margin-top:8px">
+    Passive Suche über die öffentliche OpenStreetMap Overpass API — nur Betriebe
+    mit bereits hinterlegter Website. Läuft durch, bis Sie stoppen oder eine
+    volle Runde ohne neue Treffer durchlaufen wurde. Keine technische Prüfung
+    vor Zustimmung des Leads.
+  </p>
+</div>
+
+{% if leads %}
+<div class="card-list">
+  {% for l in leads %}
+  <div class="card-item" style="cursor:default">
+    <div>
+      <div class="card-title">{{ l.company }}</div>
+      <div class="card-sub">
+        {{ l.domain }}{% if l.contact %} · {{ l.salutation or '' }} {{ l.contact }}{% endif %}
+        {% if l.email %} · {{ l.email }}{% endif %}
+      </div>
+      {% if l.address %}<div class="card-sub" style="font-size:11px;color:var(--text3)">{{ l.address }}</div>{% endif %}
+    </div>
+    <div class="card-right" style="gap:10px;display:flex;align-items:center">
+      <span class="badge badge-{{ 'done' if l.status=='confirmed' else ('info' if l.status=='emailed' else 'angebot') }}">{{ l.status }}</span>
+      <span style="font-size:11px;color:var(--text3)">{{ l.branche or '' }}</span>
+      {% if l.status == 'found' %}
+        {% if l.email %}
+        <form method="post" action="{{ url_for('send_lead_email', lid=l.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-sm btn-primary">Einladung senden</button>
+        </form>
+        {% else %}
+        <span style="font-size:11px;color:var(--text3)">keine E-Mail gefunden</span>
+        {% endif %}
+      {% elif l.status == 'emailed' %}
+        <span style="font-size:11px;color:var(--text3)">gesendet {{ l.emailed_at[:10] if l.emailed_at else '' }}</span>
+      {% elif l.order_id %}
+        <a href="{{ url_for('order_detail', oid=l.order_id) }}" class="btn btn-sm">Auftrag ansehen</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">
+  <div class="empty">Noch keine Leads gefunden. Starten Sie oben eine Suche.</div>
+</div>
+{% endif %}
+{% endblock %}

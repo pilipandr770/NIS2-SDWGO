@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kostenloser Kassensystem-Sicherheitscheck — Andrii-IT</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="login-page">
+  <div class="login-box" style="max-width:560px">
+    <div class="login-logo">Andrii-IT</div>
+    <div class="login-sub">Kostenloser Kassensystem-Sicherheitscheck — {{ lead.company }}</div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    {% if confirmed %}
+    <div class="alert alert-success">
+      Vielen Dank! Der passive Sicherheitscheck wurde angefordert und läuft im
+      Hintergrund. Sie erhalten das Ergebnis per E-Mail, sobald es von uns
+      manuell geprüft und freigegeben wurde.
+    </div>
+    {% else %}
+    <table class="detail-table" style="margin:16px 0">
+      <tr><td>Unternehmen</td><td>{{ lead.company }}</td></tr>
+      <tr><td>Domain</td><td>{{ lead.domain }}</td></tr>
+      <tr><td>Branche</td><td>{{ lead.branche or '—' }}</td></tr>
+    </table>
+
+    <p style="font-size:13px;color:var(--text2);line-height:1.5">
+      Der Check prüft ausschließlich öffentlich indexierte Daten (Shodan-Index,
+      bekannte CVE-Datenbanken) — es findet keine aktive Verbindung zu Ihrem
+      Kassensystem statt, keine Beeinträchtigung Ihres laufenden Betriebs.
+      Der Check ist kostenlos und unverbindlich. Ergebnisse werden von uns
+      manuell geprüft, bevor sie an Sie versendet werden.
+    </p>
+
+    <form method="post" action="{{ url_for('lead_confirm', token=lead.lead_token) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row" style="margin:16px 0">
+        <label style="display:flex;align-items:flex-start;gap:8px;font-weight:normal">
+          <input type="checkbox" name="owner_confirmed" required style="margin-top:3px">
+          <span>Ich bestätige, dass ich Eigentümer bzw. rechtmäßig zur Anforderung
+                dieses Checks für das oben genannte Unternehmen berechtigt bin.</span>
+        </label>
+      </div>
+      <button type="submit" class="btn btn-primary btn-block">Kostenlosen Check jetzt anfordern</button>
+    </form>
+    {% endif %}
+
+    <div style="margin-top:20px;font-size:12px;color:var(--text2)">
+      Fragen? info@andrii-it.de · +49 160 95030120
+    </div>
+  </div>
+</div>
+</body>
+</html>

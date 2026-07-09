@@ -185,6 +185,25 @@ def init_db():
             notes       TEXT,
             done_at     TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS leads (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            company      TEXT NOT NULL,
+            contact      TEXT,
+            salutation   TEXT,
+            email        TEXT,
+            phone        TEXT,
+            address      TEXT,
+            domain       TEXT NOT NULL UNIQUE,
+            branche      TEXT,
+            status       TEXT NOT NULL DEFAULT 'found',
+            lead_token   TEXT,
+            client_id    INTEGER REFERENCES clients(id),
+            order_id     INTEGER REFERENCES orders(id),
+            created_at   TEXT NOT NULL,
+            emailed_at   TEXT,
+            responded_at TEXT
+        );
     """)
     conn.commit()
     conn.close()
