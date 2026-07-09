@@ -4,9 +4,35 @@
 <div class="page-header">
   <div>
     <h1>Aufträge</h1>
-    <div class="sub">{{ orders|length }} Aufträge gesamt</div>
+    <div class="sub">{{ orders|length }} Auftrag/Aufträge{% if status_filter %} · Filter: {{ status_filter }}{% endif %}</div>
   </div>
   <a href="{{ url_for('new_angebot') }}" class="btn btn-primary">+ Neues Angebot</a>
+</div>
+
+<div class="panel" style="padding:12px 16px">
+  <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    <a href="{{ url_for('orders') }}" class="btn btn-sm {{ 'btn-primary' if not status_filter else 'btn-secondary' }}">
+      Alle ({{ status_counts.values()|sum }})
+    </a>
+    <a href="{{ url_for('orders', status='angebot') }}" class="btn btn-sm {{ 'btn-primary' if status_filter == 'angebot' else 'btn-secondary' }}">
+      Angebot ({{ status_counts.get('angebot', 0) }})
+    </a>
+    <a href="{{ url_for('orders', status='paid') }}" class="btn btn-sm {{ 'btn-primary' if status_filter == 'paid' else 'btn-secondary' }}">
+      Bezahlt ({{ status_counts.get('paid', 0) }})
+    </a>
+    <a href="{{ url_for('orders', status='running') }}" class="btn btn-sm {{ 'btn-primary' if status_filter == 'running' else 'btn-secondary' }}">
+      Läuft ({{ status_counts.get('running', 0) }})
+    </a>
+    <a href="{{ url_for('orders', status='review') }}" class="btn btn-sm {{ 'btn-primary' if status_filter == 'review' else 'btn-secondary' }}">
+      ⏳ Review nötig ({{ (status_counts.get('review',0) + status_counts.get('done',0) + status_counts.get('active',0)) }})
+    </a>
+    <a href="{{ url_for('orders', status='completed') }}" class="btn btn-sm {{ 'btn-primary' if status_filter == 'completed' else 'btn-secondary' }}">
+      Versendet ({{ status_counts.get('completed', 0) }})
+    </a>
+    <a href="{{ url_for('orders', status='failed') }}" class="btn btn-sm {{ 'btn-primary' if status_filter == 'failed' else 'btn-secondary' }}">
+      Fehler ({{ status_counts.get('failed', 0) }})
+    </a>
+  </div>
 </div>
 
 {% if orders %}
@@ -17,6 +43,7 @@
         <th>#</th>
         <th>Kunde</th>
         <th>Prüfungsziel</th>
+        <th>Art</th>
         <th>Summe</th>
         <th>Status</th>
         <th>Erstellt</th>
@@ -32,6 +59,7 @@
         <div style="font-size:11px;color:var(--text2)">{{ o.email }}</div>
       </td>
       <td style="font-size:12px">{{ o.target }}</td>
+      <td style="font-size:11px;color:var(--text2)">{{ 'Kassen-Check' if o.check_type == 'kassen' else 'Web-Audit' }}</td>
       <td style="font-weight:600;color:var(--accent)">{{ o.amount }} EUR</td>
       <td><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
       <td style="font-size:12px;color:var(--text2)">{{ o.created_at[:10] }}</td>
@@ -44,8 +72,13 @@
 {% else %}
 <div class="panel">
   <div class="empty">
+    {% if status_filter %}
+    Keine Aufträge mit diesem Status.<br>
+    <a href="{{ url_for('orders') }}" class="btn btn-secondary" style="margin-top:12px;display:inline-flex">Filter zurücksetzen</a>
+    {% else %}
     Noch keine Aufträge.<br>
     <a href="{{ url_for('new_angebot') }}" class="btn btn-primary" style="margin-top:12px;display:inline-flex">+ Erstes Angebot erstellen</a>
+    {% endif %}
   </div>
 </div>
 {% endif %}

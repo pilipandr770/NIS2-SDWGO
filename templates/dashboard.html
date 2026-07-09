@@ -26,7 +26,67 @@
     <div class="stat-num">{{ stats.done }}</div>
     <div class="stat-label">Abgeschlossen</div>
   </div>
+  <div class="stat-card success">
+    <div class="stat-num">{{ "%.0f"|format(stats.revenue) }} €</div>
+    <div class="stat-label">Umsatz (bezahlt)</div>
+  </div>
 </div>
+
+<!-- Pipeline / Funnel -->
+<div class="panel">
+  <div class="panel-header">
+    <h3>Pipeline</h3>
+    <span style="font-size:11px;color:var(--text2)">Angebot → Bezahlt → Prüfung läuft → Review nötig → Versendet</span>
+  </div>
+  <div class="pipeline-grid">
+    <a href="{{ url_for('orders', status='angebot') }}" class="pipeline-step">
+      <div class="pn">{{ pipeline.angebot }}</div>
+      <div class="pl">Angebot gesendet</div>
+    </a>
+    <a href="{{ url_for('orders', status='paid') }}" class="pipeline-step">
+      <div class="pn">{{ pipeline.paid }}</div>
+      <div class="pl">Bezahlt</div>
+    </a>
+    <a href="{{ url_for('orders', status='running') }}" class="pipeline-step">
+      <div class="pn">{{ pipeline.running }}</div>
+      <div class="pl">Prüfung läuft</div>
+    </a>
+    <a href="{{ url_for('orders', status='review') }}" class="pipeline-step p-review">
+      <div class="pn">{{ pipeline.review }}</div>
+      <div class="pl">⏳ Review nötig</div>
+    </a>
+    <a href="{{ url_for('orders', status='completed') }}" class="pipeline-step">
+      <div class="pn">{{ pipeline.completed }}</div>
+      <div class="pl">Versendet</div>
+    </a>
+    <a href="{{ url_for('orders', status='failed') }}" class="pipeline-step p-failed">
+      <div class="pn">{{ pipeline.failed }}</div>
+      <div class="pl">Fehler</div>
+    </a>
+  </div>
+</div>
+
+{% if review_orders %}
+<div class="panel" style="border-color:#f59e0b">
+  <div class="panel-header">
+    <h3>⏳ Wartet auf deine Freigabe ({{ review_orders|length }})</h3>
+  </div>
+  <div class="card-list">
+    {% for o in review_orders %}
+    <a href="{{ url_for('order_detail', oid=o.id) }}" class="card-item">
+      <div>
+        <div class="card-title">{{ o.company }}</div>
+        <div class="card-sub">{{ o.target }} · {{ 'Kassensystem-Check' if o.check_type == 'kassen' else 'Web-Audit' }} · {{ o.angebot_num or '#' + o.id|string }}</div>
+      </div>
+      <div class="card-right">
+        <span class="badge badge-{{ o.status }}">{{ o.status }}</span>
+        <span class="card-date">{{ o.updated_at[:16] }}</span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <div class="two-col">
 

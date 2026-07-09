@@ -5,3 +5,4 @@ anthropic>=0.25.0
 requests>=2.31.0
 weasyprint>=62.0
 werkzeug>=3.0.0
+stripe>=9.0.0

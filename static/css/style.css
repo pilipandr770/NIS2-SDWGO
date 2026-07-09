@@ -86,10 +86,24 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system,Bli
 .badge-angebot { background: #5a6478; }
 .badge-active  { background: var(--accent2); }
 .badge-running { background: var(--warn); color: #111; }
+.badge-paid    { background: #0891b2; }
+.badge-review  { background: #f59e0b; color: #111; }
 .badge-done    { background: #16a34a; }
 .badge-completed { background: #16a34a; }
 .badge-failed  { background: var(--danger); }
 .badge-cancelled { background: var(--text3); }
+
+/* Pipeline funnel */
+.pipeline-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 20px; }
+.pipeline-step { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 10px; text-align: center; text-decoration: none; color: var(--text); display: block; transition: .15s; }
+.pipeline-step:hover { border-color: var(--accent2); background: var(--bg3); }
+.pipeline-step .pn { font-size: 22px; font-weight: 700; }
+.pipeline-step .pl { font-size: 10px; color: var(--text2); margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.pipeline-step.p-review { border-color: #f59e0b; }
+.pipeline-step.p-review .pn { color: #f59e0b; }
+.pipeline-step.p-failed { border-color: var(--danger); }
+.pipeline-step.p-failed .pn { color: var(--danger); }
+@media (max-width: 900px) { .pipeline-grid { grid-template-columns: repeat(3, 1fr); } }
 
 /* Tables */
 .data-table { width: 100%; border-collapse: collapse; }

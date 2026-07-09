@@ -10,9 +10,17 @@
     <span class="badge badge-{{ order.status }} badge-lg">{{ order.status }}</span>
     {% if order.angebot_pdf %}
     <a href="{{ url_for('download', filename=order.angebot_pdf) }}" class="btn btn-secondary" target="_blank">⬇ Angebot PDF</a>
+    <form method="post" action="{{ url_for('send_angebot', oid=order.id) }}" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-secondary" onclick="return confirm('Angebot per E-Mail an {{ order.email }} senden?')">✉ Angebot senden</button>
+    </form>
     {% endif %}
     {% if order.report_pdf %}
     <a href="{{ url_for('download', filename=order.report_pdf) }}" class="btn btn-success" target="_blank">⬇ Bericht PDF</a>
+    <form method="post" action="{{ url_for('send_report', oid=order.id) }}" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-success" onclick="return confirm('Bericht per E-Mail an {{ order.email }} senden?')">✉ Bericht senden</button>
+    </form>
     {% endif %}
   </div>
 </div>
@@ -49,6 +57,15 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn btn-primary btn-block" onclick="return confirm('KI-Audit starten? Der Agent führt automatisierte Sicherheitsprüfungen durch.')">
         ▶ KI-Audit starten (automatisch)
+      </button>
+    </form>
+    {% endif %}
+
+    {% if order.status in ['angebot','active','done'] %}
+    <form method="post" action="{{ url_for('start_kassen_check', oid=order.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-secondary btn-block" onclick="return confirm('Passiven Kassensystem-Check starten? (nur Shodan-Index + CVE-Abgleich, keine aktive Verbindung zur Kasse)')">
+        🧾 Kassensystem-Check starten (passiv)
       </button>
     </form>
     {% endif %}

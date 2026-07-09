@@ -28,6 +28,14 @@
     </div>
 
     <div class="form-row">
+      <label>Art der Prüfung *</label>
+      <select name="check_type" class="input-full" required>
+        <option value="audit">Web-/NIS2-Audit (aktiv: Nmap, Nuclei, httpx, testssl, Nikto)</option>
+        <option value="kassen">Kassensystem-Check (passiv: Shodan + CVE-Abgleich)</option>
+      </select>
+    </div>
+
+    <div class="form-row">
       <label>Prüfungsziel (URL) *</label>
       <input type="url" name="target" class="input-full" placeholder="https://example.de"
              required pattern="https?://.+" title="Bitte vollständige URL mit https:// eingeben">
@@ -39,7 +47,7 @@
     <div class="two-col">
       <div class="form-row">
       <label>Auftragssumme (EUR)</label>
-      <input type="number" name="amount" class="input-full" value="1500" min="0" step="50" placeholder="1500">
+      <input type="number" name="amount" class="input-full" value="100" min="0" step="10" placeholder="100">
     </div>
       <div class="form-row">
         <label>Laufzeit / Liefertermin</label>

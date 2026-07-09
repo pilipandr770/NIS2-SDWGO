@@ -132,10 +132,13 @@ def init_db():
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id   INTEGER NOT NULL REFERENCES clients(id),
             target      TEXT NOT NULL,
-            amount      TEXT DEFAULT '1000',
+            amount      TEXT DEFAULT '100',
             scope       TEXT,
             notes       TEXT,
             status      TEXT NOT NULL DEFAULT 'angebot',
+            check_type  TEXT NOT NULL DEFAULT 'audit',
+            confirm_token TEXT,
+            paid_at     TEXT,
             job_id      TEXT,
             angebot_pdf TEXT,
             angebot_num TEXT,
@@ -195,6 +198,16 @@ def migrate_db():
     if "tool" not in cols:
         conn.execute("ALTER TABLE findings ADD COLUMN tool TEXT")
         conn.commit()
+
+    order_cols = {row[1] for row in conn.execute("PRAGMA table_info(orders)").fetchall()}
+    for col, coldef in [
+        ("check_type", "TEXT NOT NULL DEFAULT 'audit'"),
+        ("confirm_token", "TEXT"),
+        ("paid_at", "TEXT"),
+    ]:
+        if col not in order_cols:
+            conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {coldef}")
+            conn.commit()
     conn.close()
 
 

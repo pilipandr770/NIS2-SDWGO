@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Angebot bestätigen — Andrii-IT</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="login-page">
+  <div class="login-box" style="max-width:560px">
+    <div class="login-logo">Andrii-IT</div>
+    <div class="login-sub">Angebot #{{ order.angebot_num }} — {{ order.company }}</div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    {% if request.args.get('paid') == '1' %}
+    <div class="alert alert-success">
+      Zahlung erfolgreich erhalten. Die Prüfung wird automatisch gestartet.
+      Sie erhalten den fertigen Bericht per E-Mail, sobald er von uns
+      geprüft und freigegeben wurde.
+    </div>
+    {% elif request.args.get('paid') == '0' %}
+    <div class="alert alert-error">Zahlung abgebrochen. Sie können es jederzeit erneut versuchen.</div>
+    {% endif %}
+
+    <table class="detail-table" style="margin:16px 0">
+      <tr><td>Firma</td><td>{{ order.company }}</td></tr>
+      <tr><td>Prüfungsziel</td><td>{{ order.target }}</td></tr>
+      <tr><td>Leistungsumfang</td><td style="font-size:13px">{{ order.scope or '—' }}</td></tr>
+      <tr><td>Betrag</td><td><b>{{ order.amount }} EUR</b> zzgl. USt.</td></tr>
+    </table>
+
+    <p style="font-size:13px;color:var(--text2);line-height:1.5">
+      Diese Prüfung erfolgt ausschließlich passiv (öffentlich zugängliche
+      Datenquellen, ggf. automatisierte Web-Sicherheitsprüfung Ihrer
+      genannten Domain). Es findet keine Beeinträchtigung Ihres laufenden
+      Betriebs statt. Der fertige Bericht wird von uns manuell geprüft,
+      bevor er an Sie versendet wird.
+    </p>
+
+    {% if order.status == 'angebot' %}
+    <form method="post" action="{{ url_for('confirm_order_pay', token=order.confirm_token) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row" style="margin:16px 0">
+        <label style="display:flex;align-items:flex-start;gap:8px;font-weight:normal">
+          <input type="checkbox" name="owner_confirmed" required style="margin-top:3px">
+          <span>Ich bestätige, dass ich Eigentümer bzw. rechtmäßig zur Beauftragung
+                dieser Prüfung des oben genannten Ziels berechtigt bin.</span>
+        </label>
+      </div>
+      {% if stripe_configured %}
+      <button type="submit" class="btn btn-primary btn-block">Jetzt bestätigen &amp; bezahlen ({{ order.amount }} EUR)</button>
+      {% else %}
+      <div class="alert alert-error">Online-Zahlung derzeit nicht verfügbar — bitte kontaktieren Sie uns direkt.</div>
+      {% endif %}
+    </form>
+    {% elif order.status in ('paid','running','review') %}
+    <div class="alert alert-success">Vielen Dank — Ihre Zahlung ist bei uns eingegangen. Die Prüfung läuft bzw. wird derzeit von uns geprüft.</div>
+    {% elif order.status == 'completed' %}
+    <div class="alert alert-success">Ihr Bericht wurde bereits versendet. Bei Fragen kontaktieren Sie uns gerne unter info@andrii-it.de.</div>
+    {% endif %}
+
+    <div style="margin-top:20px;font-size:12px;color:var(--text2)">
+      Fragen? info@andrii-it.de · +49 160 95030120
+    </div>
+  </div>
+</div>
+</body>
+</html>
