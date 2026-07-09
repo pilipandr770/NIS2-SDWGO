@@ -18,7 +18,7 @@
     <a href="{{ url_for('dashboard') }}" {% if request.endpoint=='dashboard' %}class="active"{% endif %}>Dashboard</a>
     <a href="{{ url_for('clients') }}"   {% if request.endpoint in ['clients','new_client','client_detail','edit_client'] %}class="active"{% endif %}>Kunden</a>
     <a href="{{ url_for('orders') }}"    {% if request.endpoint in ['orders','order_detail'] %}class="active"{% endif %}>Aufträge</a>
-    <a href="{{ url_for('leads') }}"     {% if request.endpoint in ['leads','find_leads'] %}class="active"{% endif %}>Leads</a>
+    <a href="{{ url_for('leads') }}"     {% if request.endpoint in ['leads','start_leads_search','stop_leads_search'] %}class="active"{% endif %}>Leads</a>
     <a href="{{ url_for('new_angebot') }}" class="btn btn-nav">+ Angebot</a>
     <a href="{{ url_for('logout') }}" class="nav-logout">Abmelden</a>
   </div>
