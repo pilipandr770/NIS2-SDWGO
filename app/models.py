@@ -223,6 +223,7 @@ def migrate_db():
         ("check_type", "TEXT NOT NULL DEFAULT 'audit'"),
         ("confirm_token", "TEXT"),
         ("paid_at", "TEXT"),
+        ("llm_cost_usd", "REAL"),
     ]:
         if col not in order_cols:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {coldef}")

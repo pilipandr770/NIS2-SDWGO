@@ -43,6 +43,7 @@
     <tr><td>Auftragssumme</td><td><b>{{ order.amount }} EUR</b></td></tr>
     <tr><td>Erstellt</td><td>{{ order.created_at[:16] }}</td></tr>
     <tr><td>Aktualisiert</td><td>{{ order.updated_at[:16] }}</td></tr>
+    {% if order.llm_cost_usd %}<tr><td>KI-Kosten (geschätzt)</td><td>${{ "%.4f"|format(order.llm_cost_usd) }}</td></tr>{% endif %}
     {% if order.scope %}<tr><td>Scope</td><td style="font-size:12px">{{ order.scope }}</td></tr>{% endif %}
     {% if order.notes %}<tr><td>Notizen</td><td style="font-size:12px;color:var(--text2)">{{ order.notes }}</td></tr>{% endif %}
   </table>

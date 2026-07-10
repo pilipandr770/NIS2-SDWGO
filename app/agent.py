@@ -21,7 +21,58 @@ from models import db_execute, db_query
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MAX_ITERATIONS    = 40
+# Modell-Routing (angelehnt an BB_Assist): Standard bewusst Sonnet für den Haupt-Loop —
+# im Test produzierte Haiku deutlich mehr Findings (Duplikate, teils ohne die
+# Pflicht-Kennzeichnung "[Compliance-Hinweis]"). Bei $100/Audit ist die Ersparnis durch
+# ein billigeres Modell marginal, Berichtsqualität beim Kunden wiegt schwerer.
+# Kann per .env auf claude-haiku-4-5 umgestellt werden, wenn Kosten wichtiger sind.
 MODEL             = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+MODEL_VERIFY      = os.environ.get("ANTHROPIC_MODEL_VERIFY", "claude-sonnet-4-5")
+
+# Geschätzte Kosten pro Mio. Token (USD) — für die Kosten-Anzeige im Audit-Log.
+# Nur eine Schätzung zur Kostenkontrolle, keine Rechnungsgrundlage; bei Bedarf per
+# .env anpassen, falls sich die Anthropic-Preise ändern.
+_COST_PER_MTOK = {
+    "haiku":  (float(os.environ.get("ANTHROPIC_COST_HAIKU_IN",  "1.0")),
+               float(os.environ.get("ANTHROPIC_COST_HAIKU_OUT", "5.0"))),
+    "sonnet": (float(os.environ.get("ANTHROPIC_COST_SONNET_IN",  "3.0")),
+               float(os.environ.get("ANTHROPIC_COST_SONNET_OUT", "15.0"))),
+    "opus":   (float(os.environ.get("ANTHROPIC_COST_OPUS_IN",  "15.0")),
+               float(os.environ.get("ANTHROPIC_COST_OPUS_OUT", "75.0"))),
+}
+
+
+def _price_for(model: str) -> tuple:
+    m = (model or "").lower()
+    key = "haiku" if "haiku" in m else ("opus" if "opus" in m else "sonnet")
+    return _COST_PER_MTOK[key]
+
+
+def _compress_messages(messages: list, keep_recent: int = 6, max_len: int = 400) -> list:
+    """Leichte, abhängigkeitsfreie Kontext-Kompression (ähnliches Ziel wie BB_Assists
+    headroom-Kompression, hier ohne zusätzliche Abhängigkeit, da unsere Tool-Ausgaben
+    ohnehin bereits auf 5000 Zeichen gekappt sind — kein 50k-URL-Problem wie dort).
+    Kürzt Tool-Ausgaben in ÄLTEREN Nachrichten weiter auf eine kurze Zusammenfassung;
+    die letzten `keep_recent` Nachrichten bleiben unverändert (aktiver Kontext).
+    Gibt eine NEUE Liste zurück — die vom Aufrufer gehaltene Original-Historie bleibt
+    unverändert (so behält jede Iteration Zugriff auf die volle Historie)."""
+    if len(messages) <= keep_recent:
+        return messages
+    cutoff = len(messages) - keep_recent
+    compressed = []
+    for i, msg in enumerate(messages):
+        if i >= cutoff or msg.get("role") != "user" or not isinstance(msg.get("content"), list):
+            compressed.append(msg)
+            continue
+        new_content = []
+        for block in msg["content"]:
+            if isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("content"), str):
+                text = block["content"]
+                if len(text) > max_len:
+                    block = {**block, "content": text[:max_len] + f"\n… [gekürzt, {len(text)} Zeichen gesamt]"}
+            new_content.append(block)
+        compressed.append({**msg, "content": new_content})
+    return compressed
 
 
 def _log(order_id: int, level: str, message: str):
@@ -614,6 +665,7 @@ def run_audit_agent(order_id: int, target: str, company: str):
     api_errors = 0
     last_tool_run = ""          # tracks the most-recently executed tool for finding attribution
     tools_used    = {}          # {tool_name: {"start": iso, "end": iso, "findings": count}}
+    usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
 
     for iteration in range(MAX_ITERATIONS):
         _log(order_id, "AGENT", f"Iteration {iteration + 1}/{MAX_ITERATIONS}")
@@ -624,9 +676,16 @@ def run_audit_agent(order_id: int, target: str, company: str):
                 max_tokens=4096,
                 system=SYSTEM_PROMPT.format(max_iter=MAX_ITERATIONS),
                 tools=TOOLS_SPEC,
-                messages=messages,
+                messages=_compress_messages(messages),
             )
             api_errors = 0  # reset on success
+            in_tok  = getattr(response.usage, "input_tokens", 0) or 0
+            out_tok = getattr(response.usage, "output_tokens", 0) or 0
+            price_in, price_out = _price_for(MODEL)
+            usage["calls"] += 1
+            usage["input_tokens"]  += in_tok
+            usage["output_tokens"] += out_tok
+            usage["cost_usd"] += in_tok / 1_000_000 * price_in + out_tok / 1_000_000 * price_out
         except anthropic.RateLimitError:
             _log(order_id, "INFO", "API Rate Limit — warte 30s...")
             time.sleep(30)
@@ -762,24 +821,38 @@ def run_audit_agent(order_id: int, target: str, company: str):
         db_execute("UPDATE orders SET status='done',updated_at=? WHERE id=?",
                    (datetime.now().isoformat(), order_id))
 
-    _verify_high_severity_findings(order_id, messages, client)
+    _log(order_id, "INFO",
+         f"LLM-Nutzung Hauptlauf ({MODEL}): {usage['calls']} Calls, "
+         f"{usage['input_tokens']} Input-/{usage['output_tokens']} Output-Tokens, "
+         f"geschätzte Kosten: ${usage['cost_usd']:.4f}")
+
+    verify_usage = _verify_high_severity_findings(order_id, messages, client)
+
+    total_cost = usage["cost_usd"] + verify_usage["cost_usd"]
+    total_calls = usage["calls"] + verify_usage["calls"]
+    _log(order_id, "INFO",
+         f"LLM-Nutzung gesamt: {total_calls} Calls, geschätzte Kosten: ${total_cost:.4f}")
+    db_execute("UPDATE orders SET llm_cost_usd=? WHERE id=?", (round(total_cost, 6), order_id))
 
 
-def _verify_high_severity_findings(order_id: int, messages: list, client) -> None:
+def _verify_high_severity_findings(order_id: int, messages: list, client) -> dict:
     """Verifikations-/Filter-Schritt für alle critical/high Findings: prüft jeden Befund
     noch einmal GEGEN die im Konversationsverlauf bereits sichtbaren Roh-Ausgaben der Tools
     und stuft unbelegte Befunde herab statt sie unkommentiert im Bericht zu lassen. Keine
     aktive Nachprüfung/Exploitation — reine Re-Analyse der bereits erhobenen (passiven)
     Tool-Ausgaben, angelehnt an ein PoC-/Plausibilitäts-Review vor dem Kundenbericht."""
+    verify_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+
     findings = db_query(
         "SELECT id,title,description,severity,tool,target FROM findings "
         "WHERE order_id=? AND severity IN ('critical','high')", (order_id,)
     )
     if not findings:
         _log(order_id, "INFO", "Verifikation: keine kritischen/hohen Befunde vorhanden")
-        return
+        return verify_usage
 
-    _log(order_id, "INFO", f"Verifikation von {len(findings)} kritischen/hohen Befunden gestartet")
+    _log(order_id, "INFO",
+         f"Verifikation von {len(findings)} kritischen/hohen Befunden gestartet (Modell: {MODEL_VERIFY})")
 
     findings_block = "\n".join(
         f"- ID {f['id']} [{f['severity'].upper()}] {f['title']} (Tool: {f['tool']}, Ziel: {f['target']})\n"
@@ -822,15 +895,22 @@ def _verify_high_severity_findings(order_id: int, messages: list, client) -> Non
 
     try:
         response = client.messages.create(
-            model=MODEL,
+            model=MODEL_VERIFY,
             max_tokens=2048,
-            messages=messages + [{"role": "user", "content": verify_prompt}],
+            messages=_compress_messages(messages) + [{"role": "user", "content": verify_prompt}],
             tools=[verify_tool],
             tool_choice={"type": "tool", "name": "submit_verification"},
         )
+        in_tok  = getattr(response.usage, "input_tokens", 0) or 0
+        out_tok = getattr(response.usage, "output_tokens", 0) or 0
+        price_in, price_out = _price_for(MODEL_VERIFY)
+        verify_usage.update(
+            calls=1, input_tokens=in_tok, output_tokens=out_tok,
+            cost_usd=in_tok / 1_000_000 * price_in + out_tok / 1_000_000 * price_out,
+        )
     except Exception as e:
         _log(order_id, "ERROR", f"Verifikation fehlgeschlagen (übersprungen): {e}")
-        return
+        return verify_usage
 
     verdicts = []
     for block in response.content:
@@ -855,3 +935,4 @@ def _verify_high_severity_findings(order_id: int, messages: list, client) -> Non
             confirmed += 1
 
     _log(order_id, "INFO", f"Verifikation abgeschlossen: {confirmed} bestätigt, {downgraded} herabgestuft")
+    return verify_usage
