@@ -213,6 +213,11 @@ def _build_protocol_rows(tools_used: dict, logs: list, target: str) -> str:
         "cookie_check": ("Cookie-Check (intern)",         "Secure/HttpOnly/SameSite-Flags"),
         "nuclei":       ("Nuclei (ProjectDiscovery)",    "CVE-Templates, Fehlkonfigurationen, sensible Endpunkte"),
         "nikto":        ("Nikto 2.x",                    "OWASP Top 10, gefährliche Dateien, Web-Misconfigs"),
+        "dnsx":         ("dnsx (ProjectDiscovery)",       "DNS-Validierung von Domain + Subdomains"),
+        "gau":          ("GetAllUrls (gau)",              "Archivierte/historische URLs (Wayback, Common Crawl)"),
+        "katana":       ("Katana (ProjectDiscovery)",     "Web-Crawling inkl. JS-Routen, Endpunkt-Entdeckung"),
+        "ffuf":         ("ffuf",                          "Content-Discovery: unverlinkte Verzeichnisse/Dateien"),
+        "arjun":        ("Arjun",                         "Entdeckung versteckter HTTP-Parameter"),
     }
     rows = ""
     idx = 1
@@ -767,6 +772,9 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
         "nikto": "Nikto (Web-Scan)", "dns_audit": "DNS Audit (dig)",
         "subfinder": "Subfinder (Subdomain-Enum)", "cookie_check": "Cookie-Check",
         "live_check": "Live-Check (intern)",
+        "dnsx": "dnsx (DNS-Validierung)", "gau": "gau (archivierte URLs)",
+        "katana": "Katana (Web-Crawler)", "ffuf": "ffuf (Content-Discovery)",
+        "arjun": "Arjun (Parameter-Discovery)",
     }
 
     def _render_ftable(flist, offset=0):

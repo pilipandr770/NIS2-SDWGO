@@ -1,6 +1,7 @@
 """
 NIS2 Audit Agent — Claude-powered automated security audit
-Supported tools: nmap, nuclei, httpx, subfinder, testssl, nikto, dns_audit, cookie_check
+Supported tools: nmap, nuclei, httpx, subfinder, testssl, nikto, dns_audit, cookie_check,
+                 dnsx, gau, katana, ffuf, arjun
 """
 import os
 import re
@@ -19,7 +20,7 @@ except ImportError:
 from models import db_execute, db_query
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MAX_ITERATIONS    = 30
+MAX_ITERATIONS    = 40
 MODEL             = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
 
@@ -249,6 +250,84 @@ def _tool_cookie_check(target: str) -> str:
     return "\n".join(results) if results else "Keine Set-Cookie-Header gefunden"
 
 
+def _tool_dnsx(target: str) -> str:
+    """Validiert DNS-Auflösung für eine Domain + gängige Subdomains (schnell, passiv)."""
+    if not shutil.which("dnsx"):
+        return "(dnsx not installed)"
+    host = target.replace("https://", "").replace("http://", "").split("/")[0]
+    parts = host.split(".")
+    domain = ".".join(parts[-2:]) if len(parts) >= 2 else host
+    candidates = [host] + [f"{sub}.{domain}" for sub in
+                            ("www", "api", "admin", "mail", "vpn", "dev", "staging", "test", "portal")]
+    input_data = "\n".join(dict.fromkeys(candidates))
+    try:
+        result = subprocess.run(
+            ["dnsx", "-silent", "-resp", "-t", "50"],
+            input=input_data, capture_output=True, text=True, timeout=30
+        )
+        out = (result.stdout + result.stderr).strip()
+        return out[:5000] if out else "(keine DNS-Einträge gefunden)"
+    except Exception as e:
+        return f"(error: {e})"
+
+
+def _tool_gau(target: str) -> str:
+    """Historische/archivierte URLs (Wayback, Common Crawl, OTX) — findet vergessene Endpunkte."""
+    if not shutil.which("gau"):
+        return "(gau not installed)"
+    host = target.replace("https://", "").replace("http://", "").split("/")[0]
+    parts = host.split(".")
+    domain = ".".join(parts[-2:]) if len(parts) >= 2 else host
+    out = _run_cmd([
+        "gau", domain,
+        "--blacklist", "png,jpg,gif,jpeg,svg,ico,css,woff,woff2,ttf,mp4,mp3",
+        "--threads", "5", "--timeout", "20"
+    ], timeout=60)
+    lines = out.splitlines()
+    if len(lines) > 150:
+        out = "\n".join(lines[:150]) + f"\n… ({len(lines)} URLs gesamt, gekürzt auf 150)"
+    return out
+
+
+def _tool_katana(target: str) -> str:
+    """Web-Crawler für Endpunkt-Entdeckung (inkl. JS-Crawling), begrenzte Tiefe/Zeit."""
+    if not shutil.which("katana"):
+        return "(katana not installed)"
+    url = target if target.startswith("http") else f"https://{target}"
+    out = _run_cmd([
+        "katana", "-u", url, "-silent", "-jc",
+        "-depth", "2", "-concurrency", "10", "-rate-limit", "50",
+        "-timeout", "10", "-crawl-duration", "60s"
+    ], timeout=90)
+    lines = out.splitlines()
+    if len(lines) > 150:
+        out = "\n".join(lines[:150]) + f"\n… ({len(lines)} URLs gesamt, gekürzt auf 150)"
+    return out
+
+
+def _tool_ffuf(target: str) -> str:
+    """Content-Discovery: sucht nach nicht verlinkten Verzeichnissen/Dateien (kleine Wordlist)."""
+    if not shutil.which("ffuf"):
+        return "(ffuf not installed)"
+    wordlist = "/wordlists/common.txt" if os.path.isfile("/wordlists/common.txt") else None
+    if not wordlist:
+        return "(kein Wordlist verfügbar)"
+    url = target if target.startswith("http") else f"https://{target}"
+    return _run_cmd([
+        "ffuf", "-u", f"{url.rstrip('/')}/FUZZ", "-w", wordlist,
+        "-mc", "200,201,301,302,403", "-t", "20", "-rate", "20",
+        "-timeout", "8", "-silent"
+    ], timeout=90)
+
+
+def _tool_arjun(target: str) -> str:
+    """Entdeckt versteckte HTTP-GET/POST-Parameter eines Endpunkts (potenzielle Angriffsfläche)."""
+    if not shutil.which("arjun"):
+        return "(arjun not installed)"
+    url = target if target.startswith("http") else f"https://{target}"
+    return _run_cmd(["arjun", "-u", url, "--stable", "-q", "-t", "10"], timeout=60)
+
+
 TOOLS = {
     "nmap":         {"fn": _tool_nmap,        "desc": "Port scan + service detection (21 ports)"},
     "nuclei":       {"fn": _tool_nuclei,      "desc": "CVE & misconfiguration vulnerability scan"},
@@ -258,6 +337,11 @@ TOOLS = {
     "nikto":        {"fn": _tool_nikto,       "desc": "Web vulnerability scan (OWASP, dangerous files)"},
     "dns_audit":    {"fn": _tool_dns_audit,   "desc": "DNS: SPF, DMARC, DKIM, DNSSEC, zone transfer"},
     "cookie_check": {"fn": _tool_cookie_check,"desc": "Cookie security: Secure/HttpOnly/SameSite flags"},
+    "dnsx":         {"fn": _tool_dnsx,        "desc": "DNS-Validierung für Domain + gängige Subdomains"},
+    "gau":          {"fn": _tool_gau,         "desc": "Archivierte/historische URLs (Wayback, Common Crawl)"},
+    "katana":       {"fn": _tool_katana,      "desc": "Web-Crawler: entdeckt Endpunkte inkl. JS-Routen"},
+    "ffuf":         {"fn": _tool_ffuf,        "desc": "Content-Discovery: unverlinkte Verzeichnisse/Dateien"},
+    "arjun":        {"fn": _tool_arjun,       "desc": "Findet versteckte HTTP-Parameter eines Endpunkts"},
 }
 
 SYSTEM_PROMPT = """You are an expert cybersecurity auditor specializing in NIS2 (§30 BSIG) and DSGVO compliance for German businesses.
@@ -271,13 +355,25 @@ AUDIT WORKFLOW (follow this order):
 2. nmap — discover open ports, running services, banners
 3. testssl — deep TLS/SSL analysis (ciphers, protocols, certificate, CVEs like POODLE/BEAST/Heartbleed)
 4. subfinder — enumerate subdomains, find shadow IT
-5. dns_audit — check SPF, DMARC, DKIM, DNSSEC, zone transfer
-6. cookie_check — validate cookie security flags
-7. nuclei — scan for CVEs and misconfigurations
-8. nikto — web vulnerability scan (OWASP Top 10, dangerous files)
-9. Analyze all results comprehensively
-10. Add findings for EVERY discovered issue
-11. finish_audit with a professional summary in German
+5. dnsx — validate which of the discovered subdomains actually resolve (avoid chasing dead hosts)
+6. dns_audit — check SPF, DMARC, DKIM, DNSSEC, zone transfer
+7. cookie_check — validate cookie security flags
+8. gau + katana — discover additional URLs/endpoints (archived + crawled) beyond the homepage
+9. ffuf — content discovery for unlinked directories/files on the main host
+10. arjun — on 1-2 of the most interesting discovered endpoints (e.g. with query params or forms),
+    check for hidden HTTP parameters
+11. nuclei — scan for CVEs and misconfigurations (use additional URLs from gau/katana as targets too
+    if they look distinct/interesting, not just the homepage)
+12. nikto — web vulnerability scan (OWASP Top 10, dangerous files)
+13. Analyze all results comprehensively
+14. Add findings for EVERY discovered issue
+15. finish_audit with a professional summary in German
+
+Note: gau/katana/ffuf/arjun are recon/discovery tools, not vulnerability scanners — they rarely
+produce findings by themselves. Only add a finding from their output if something CONCRETE and
+security-relevant is visible (e.g. an exposed /admin/backup.zip, a leaked API key in an archived
+URL, an endpoint with obvious debug/staging parameters). Do not create findings just because a
+URL exists — that is normal recon noise, not a vulnerability.
 
 FINDING REQUIREMENTS:
 - title: short descriptive title IN GERMAN (max 80 chars)
@@ -490,7 +586,8 @@ def run_audit_agent(order_id: int, target: str, company: str):
         return
 
     # Verify tool availability — only check tools that are actual OS binaries
-    _BINARY_TOOLS = {"nmap", "nuclei", "httpx", "subfinder", "nikto"}
+    _BINARY_TOOLS = {"nmap", "nuclei", "httpx", "subfinder", "nikto",
+                      "dnsx", "gau", "katana", "ffuf", "arjun"}
     _SCRIPT_TOOLS  = {"dns_audit", "cookie_check", "testssl"}  # Python functions or sh wrappers
     missing_tools = [t for t in _BINARY_TOOLS if not shutil.which(t)]
     if missing_tools:
@@ -664,3 +761,97 @@ def run_audit_agent(order_id: int, target: str, company: str):
         _auto_mark_tasks(order_id)
         db_execute("UPDATE orders SET status='done',updated_at=? WHERE id=?",
                    (datetime.now().isoformat(), order_id))
+
+    _verify_high_severity_findings(order_id, messages, client)
+
+
+def _verify_high_severity_findings(order_id: int, messages: list, client) -> None:
+    """Verifikations-/Filter-Schritt für alle critical/high Findings: prüft jeden Befund
+    noch einmal GEGEN die im Konversationsverlauf bereits sichtbaren Roh-Ausgaben der Tools
+    und stuft unbelegte Befunde herab statt sie unkommentiert im Bericht zu lassen. Keine
+    aktive Nachprüfung/Exploitation — reine Re-Analyse der bereits erhobenen (passiven)
+    Tool-Ausgaben, angelehnt an ein PoC-/Plausibilitäts-Review vor dem Kundenbericht."""
+    findings = db_query(
+        "SELECT id,title,description,severity,tool,target FROM findings "
+        "WHERE order_id=? AND severity IN ('critical','high')", (order_id,)
+    )
+    if not findings:
+        _log(order_id, "INFO", "Verifikation: keine kritischen/hohen Befunde vorhanden")
+        return
+
+    _log(order_id, "INFO", f"Verifikation von {len(findings)} kritischen/hohen Befunden gestartet")
+
+    findings_block = "\n".join(
+        f"- ID {f['id']} [{f['severity'].upper()}] {f['title']} (Tool: {f['tool']}, Ziel: {f['target']})\n"
+        f"  Beschreibung: {(f['description'] or '')[:300]}"
+        for f in findings
+    )
+    verify_prompt = (
+        "Du hast oben einen Sicherheitsaudit durchgeführt. Bevor der Bericht an den Kunden geht, "
+        "prüfe JEDEN der folgenden kritischen/hohen Befunde noch einmal GEGEN die bereits "
+        "angezeigten Roh-Ausgaben der Tools in diesem Verlauf. Ist der Befund direkt und "
+        "eindeutig durch die Tool-Ausgabe belegt? Wenn ja: confirmed. Wenn die Ausgabe die "
+        "Schwere nicht eindeutig rechtfertigt, du sie nicht mehr im Verlauf findest, oder es sich "
+        "eigentlich nur um eine informative Beobachtung ohne konkreten Nachweis handelt: "
+        "downgrade (mit kurzer Begründung auf Deutsch).\n\n"
+        f"{findings_block}\n\n"
+        "Rufe submit_verification GENAU EINMAL für ALLE oben aufgelisteten IDs auf."
+    )
+    verify_tool = {
+        "name": "submit_verification",
+        "description": "Reicht die Verifikationsergebnisse für alle geprüften Findings ein",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "verdicts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "finding_id": {"type": "integer"},
+                            "verdict":    {"type": "string", "enum": ["confirmed", "downgrade"]},
+                            "reason":     {"type": "string", "description": "Nur bei downgrade, auf Deutsch"}
+                        },
+                        "required": ["finding_id", "verdict"]
+                    }
+                }
+            },
+            "required": ["verdicts"]
+        }
+    }
+
+    try:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=2048,
+            messages=messages + [{"role": "user", "content": verify_prompt}],
+            tools=[verify_tool],
+            tool_choice={"type": "tool", "name": "submit_verification"},
+        )
+    except Exception as e:
+        _log(order_id, "ERROR", f"Verifikation fehlgeschlagen (übersprungen): {e}")
+        return
+
+    verdicts = []
+    for block in response.content:
+        if block.type == "tool_use" and block.name == "submit_verification":
+            verdicts = block.input.get("verdicts", [])
+
+    confirmed, downgraded = 0, 0
+    for v in verdicts:
+        fid = v.get("finding_id")
+        if not isinstance(fid, int):
+            continue
+        if v.get("verdict") == "downgrade":
+            reason = v.get("reason", "")
+            db_execute(
+                "UPDATE findings SET severity='low',severity_rank=4,cvss='',"
+                "title='[Unbestätigt] ' || title WHERE id=? AND severity IN ('critical','high')",
+                (fid,)
+            )
+            _log(order_id, "WARN", f"Finding #{fid} bei Verifikation herabgestuft: {reason[:200]}")
+            downgraded += 1
+        else:
+            confirmed += 1
+
+    _log(order_id, "INFO", f"Verifikation abgeschlossen: {confirmed} bestätigt, {downgraded} herabgestuft")

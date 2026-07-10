@@ -1,9 +1,14 @@
 # ── Stage 1: Build Go-based security tools ───────────────────────────────────
-FROM golang:1.22-alpine AS go-tools
+FROM golang:1.24-alpine AS go-tools
+ENV GOTOOLCHAIN=auto
 RUN apk add --no-cache git
 RUN go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.3.4 \
  && go install github.com/projectdiscovery/httpx/cmd/httpx@v1.6.9 \
- && go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.6.6
+ && go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.6.6 \
+ && go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest \
+ && go install github.com/projectdiscovery/katana/cmd/katana@latest \
+ && go install github.com/lc/gau/v2/cmd/gau@latest \
+ && go install github.com/ffuf/ffuf/v2@latest
 
 # ── Stage 2: testssl.sh ───────────────────────────────────────────────────────
 FROM alpine:3.19 AS testssl-stage
@@ -36,10 +41,20 @@ RUN git clone --depth=1 https://github.com/sullo/nikto.git /opt/nikto \
 COPY --from=go-tools /go/bin/nuclei    /usr/local/bin/nuclei
 COPY --from=go-tools /go/bin/httpx     /usr/local/bin/httpx
 COPY --from=go-tools /go/bin/subfinder /usr/local/bin/subfinder
+COPY --from=go-tools /go/bin/dnsx      /usr/local/bin/dnsx
+COPY --from=go-tools /go/bin/katana    /usr/local/bin/katana
+COPY --from=go-tools /go/bin/gau       /usr/local/bin/gau
+COPY --from=go-tools /go/bin/ffuf      /usr/local/bin/ffuf
 
 # Copy testssl.sh
 COPY --from=testssl-stage /opt/testssl /opt/testssl
 RUN ln -s /opt/testssl/testssl.sh /usr/local/bin/testssl.sh && chmod +x /opt/testssl/testssl.sh
+
+# Kompaktes Wordlist fuer ffuf (Content-Discovery) — bewusst klein gehalten
+RUN mkdir -p /wordlists && \
+    (curl -sf -o /wordlists/common.txt \
+      "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt" \
+     || printf 'admin\nlogin\napi\nbackup\nconfig\n.env\n.git\ntest\nold\ndev\nstaging\nuploads\nadmin.php\nphpinfo.php\n' > /wordlists/common.txt)
 
 WORKDIR /app
 
