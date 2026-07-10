@@ -31,6 +31,7 @@ import requests
 from models import db_query, db_execute
 from payments import PUBLIC_BASE_URL
 import mailer
+import inbox_checker
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; AndriiIT-LeadFinder/1.0; +https://andrii-it.de)",
@@ -829,3 +830,73 @@ def _send_backlog_loop() -> None:
     finally:
         with _send_lock:
             _send_state["running"] = False
+
+
+# ── Täglicher Zusammenfassungs-Report (per E-Mail an ADMIN_EMAIL) ──────────────
+
+def build_daily_summary() -> tuple[str, str]:
+    """Prüft zuerst das Postfach (Bounces/Antworten, siehe inbox_checker) und baut
+    dann Betreff+Text der täglichen Zusammenfassung."""
+    inbox_result = {"bounces_found": 0, "replies_found": 0, "checked": 0}
+    inbox_error = None
+    try:
+        inbox_result = inbox_checker.check_inbox()
+    except inbox_checker.InboxNotConfigured as e:
+        inbox_error = str(e)
+    except Exception as e:
+        inbox_error = f"Postfach-Prüfung fehlgeschlagen: {e}"
+
+    counts = {r["status"]: r["n"] for r in db_query("SELECT status, COUNT(*) as n FROM leads GROUP BY status")}
+    cutoff_24h = (datetime.now() - timedelta(hours=24)).isoformat()
+
+    new_replies = db_query(
+        "SELECT company,email,reply_snippet FROM leads WHERE replied_at IS NOT NULL "
+        "AND replied_at > ? ORDER BY replied_at DESC", (cutoff_24h,)
+    )
+    new_bounces = db_query(
+        "SELECT company,domain FROM leads WHERE bounced_at IS NOT NULL AND bounced_at > ?",
+        (cutoff_24h,)
+    )
+
+    search_status = get_status()
+    send_status = get_send_status()
+    sent_24h = _sends_last_24h()
+
+    subject = f"Lead-Kampagne — Tagesreport {datetime.now().strftime('%d.%m.%Y')}"
+
+    lines = [
+        f"Versendet letzte 24h: {sent_24h} / {SEND_DAILY_CAP}",
+        f"Automatischer Versand: {'läuft' if send_status['running'] else 'gestoppt'}",
+        f"Lead-Suche: {'läuft' if search_status['running'] else 'gestoppt'} "
+        f"(gefunden diese Sitzung: {search_status.get('found_total', 0)})",
+        "",
+        "Status-Übersicht (gesamt):",
+    ]
+    for status in ("found", "emailed", "confirmed", "bounced", "error"):
+        lines.append(f"  {status}: {counts.get(status, 0)}")
+    lines.append("")
+
+    if new_replies:
+        lines.append(f"NEUE ANTWORTEN LETZTE 24H ({len(new_replies)}) — bitte prüfen:")
+        for r in new_replies:
+            lines.append(f"  • {r['company']} ({r['email']}): {(r['reply_snippet'] or '')[:150]}")
+    else:
+        lines.append("Keine neuen Antworten in den letzten 24h.")
+    lines.append("")
+
+    if new_bounces:
+        lines.append(f"Neue Zustellfehler (Bounces) letzte 24h: {len(new_bounces)}")
+        for b in new_bounces[:20]:
+            lines.append(f"  • {b['company']} ({b['domain']})")
+        lines.append("")
+
+    if inbox_error:
+        lines.append(f"Hinweis: {inbox_error}")
+    else:
+        lines.append(
+            f"Postfach geprüft: {inbox_result['checked']} Nachrichten gesichtet, "
+            f"{inbox_result['bounces_found']} Bounces / {inbox_result['replies_found']} "
+            f"Antworten neu erkannt."
+        )
+
+    return subject, "\n".join(lines)

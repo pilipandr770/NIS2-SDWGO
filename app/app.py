@@ -3,8 +3,8 @@ NIS2Audit — Flask додаток для надання послуг NIS2/DSGVO
 Andrii-IT | IT-Sicherheitsdienstleistungen
 """
 
-import os, secrets, json, subprocess, threading, uuid, re
-from datetime import datetime, timedelta
+import os, secrets, json, subprocess, threading, uuid, re, time
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -779,8 +779,35 @@ def _log(order_id, level, message):
     db_execute("INSERT INTO audit_logs (order_id,level,message,created_at) VALUES (?,?,?,?)",
                (order_id, level, message, datetime.now().isoformat()))
 
+# ── Täglicher Lead-Kampagnen-Report ────────────────────────────────────────────
+DAILY_SUMMARY_HOUR_UTC = int(os.environ.get("DAILY_SUMMARY_HOUR_UTC", "6"))
+
+def _send_daily_summary():
+    try:
+        subject, body = lead_finder.build_daily_summary()
+        mailer.send_email(ADMIN_EMAIL, subject, body)
+    except Exception as e:
+        print("Tagesreport fehlgeschlagen:", e)
+
+def _daily_summary_loop():
+    while True:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        target = now.replace(hour=DAILY_SUMMARY_HOUR_UTC, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        time.sleep(max(1, (target - now).total_seconds()))
+        _send_daily_summary()
+
+@app.route("/leads/send-daily-summary-now", methods=["POST"])
+@login_required
+def send_daily_summary_now():
+    threading.Thread(target=_send_daily_summary, daemon=True).start()
+    flash(f"Tagesreport wird erstellt und an {ADMIN_EMAIL} gesendet …", "success")
+    return redirect(url_for("leads"))
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_db()
     migrate_db()
+    threading.Thread(target=_daily_summary_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

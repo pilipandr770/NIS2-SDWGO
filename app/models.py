@@ -235,6 +235,9 @@ def migrate_db():
         ("business_context", "TEXT"),
         ("draft_subject", "TEXT"),
         ("draft_body", "TEXT"),
+        ("bounced_at", "TEXT"),
+        ("replied_at", "TEXT"),
+        ("reply_snippet", "TEXT"),
     ]:
         if col not in lead_cols:
             conn.execute(f"ALTER TABLE leads ADD COLUMN {col} {coldef}")
