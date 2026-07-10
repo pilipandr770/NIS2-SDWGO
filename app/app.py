@@ -217,11 +217,16 @@ def leads_status():
 @app.route("/leads/<int:lid>/preview", methods=["POST"])
 @login_required
 def preview_lead_email(lid):
-    try:
-        lead_finder.analyze_lead(lid)
-        flash("Vorschau erstellt — bitte prüfen und ggf. anpassen vor dem Versand", "success")
-    except Exception as e:
-        flash(f"Fehler bei der Analyse: {e}", "danger")
+    """Startet die Website-Analyse (mehrere externe HTTP-Requests, kann 10-30s dauern)
+    im Hintergrund statt im Request-Handler — sonst blockiert ein langsames Zielsystem
+    den gesamten Server (Single-Thread-Risiko), inkl. Healthcheck anderer Nutzer."""
+    def run():
+        try:
+            lead_finder.analyze_lead(lid)
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True).start()
+    flash("Analyse gestartet (läuft im Hintergrund) — Seite in ein paar Sekunden neu laden", "success")
     return redirect(url_for("leads"))
 
 @app.route("/leads/<int:lid>/send", methods=["POST"])
@@ -752,4 +757,4 @@ def _log(order_id, level, message):
 if __name__ == "__main__":
     init_db()
     migrate_db()
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
