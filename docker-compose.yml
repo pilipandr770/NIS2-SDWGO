@@ -27,6 +27,8 @@ services:
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:5000}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - LEAD_SEND_INTERVAL_SECONDS=${LEAD_SEND_INTERVAL_SECONDS:-60}
+      - LEAD_SEND_DAILY_CAP=${LEAD_SEND_DAILY_CAP:-150}
     volumes:
       - nis2audit_data:/data
       - nis2audit_reports:/app/reports

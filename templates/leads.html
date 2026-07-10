@@ -4,8 +4,57 @@
 <div class="page-header">
   <div>
     <h1>Leads (Kassensystem-Zielgruppe)</h1>
-    <div class="sub">{{ leads|length }} Leads gesamt</div>
+    <div class="sub">
+      {{ counts.values()|sum }} Leads gesamt ·
+      {{ counts.get('found', 0) }} offen · {{ counts.get('emailed', 0) }} angeschrieben ·
+      {{ counts.get('confirmed', 0) }} bestätigt · {{ counts.get('error', 0) }} Fehler
+      (letzte 200 unten angezeigt)
+    </div>
   </div>
+</div>
+
+<div class="panel" style="margin-bottom:20px">
+  {% if send_status.running %}
+  <div id="send-status-box" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <span class="badge badge-running">Versand läuft</span>
+    <span style="font-size:13px">
+      <span id="send-total">{{ send_status.sent_total }}</span> gesendet diese Sitzung ·
+      <span id="send-24h">{{ send_status.sent_last_24h }}</span>/{{ send_status.daily_cap }} letzte 24h ·
+      1 Mail / {{ send_status.interval_seconds }}s
+      {% if send_status.last_sent_company %} · zuletzt: {{ send_status.last_sent_company }}{% endif %}
+    </span>
+    <form method="post" action="{{ url_for('stop_leads_sending') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm" style="background:var(--danger);color:#fff">Versand stoppen</button>
+    </form>
+  </div>
+  <script>
+    (function poll() {
+      fetch("{{ url_for('leads_sending_status') }}").then(r => r.json()).then(s => {
+        if (!s.running) { location.reload(); return; }
+        document.getElementById('send-total').textContent = s.sent_total;
+        document.getElementById('send-24h').textContent = s.sent_last_24h;
+        setTimeout(poll, 5000);
+      }).catch(() => setTimeout(poll, 10000));
+    })();
+  </script>
+  {% else %}
+  <form method="post" action="{{ url_for('start_leads_sending') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-primary">
+      Automatischen Versand starten ({{ counts.get('found', 0) }} offen, max. {{ send_status.daily_cap }}/24h)
+    </button>
+  </form>
+  {% if send_status.last_error %}
+  <div class="alert alert-danger" style="margin-top:8px">{{ send_status.last_error }}</div>
+  {% endif %}
+  {% endif %}
+  <p style="font-size:11px;color:var(--text3);margin-top:8px">
+    Analysiert jeden offenen Lead automatisch (Website-Check + personalisiertes Anschreiben)
+    und sendet direkt — ohne Einzel-Review. Läuft dauerhaft weiter, holt auch neu gefundene
+    Leads aus der laufenden Suche ab. Ihre Freigabe ist erst wieder gefragt, wenn ein Lead
+    dem Check zustimmt und bezahlt (dann Bericht vor Versand prüfen).
+  </p>
 </div>
 
 <div class="panel" style="margin-bottom:20px">
@@ -73,7 +122,7 @@
         {% if l.business_context %}<div class="card-sub" style="font-size:11px;color:var(--text3);font-style:italic">{{ l.business_context }}</div>{% endif %}
       </div>
       <div class="card-right" style="gap:10px;display:flex;align-items:center">
-        <span class="badge badge-{{ 'done' if l.status=='confirmed' else ('info' if l.status=='emailed' else 'angebot') }}">{{ l.status }}</span>
+        <span class="badge badge-{{ 'done' if l.status=='confirmed' else ('info' if l.status=='emailed' else ('critical' if l.status=='error' else 'angebot')) }}">{{ l.status }}</span>
         <span style="font-size:11px;color:var(--text3)">{{ l.branche or '' }}</span>
         {% if l.status == 'emailed' %}
           <span style="font-size:11px;color:var(--text3)">gesendet {{ l.emailed_at[:10] if l.emailed_at else '' }}</span>

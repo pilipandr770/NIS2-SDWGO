@@ -16,18 +16,21 @@ Ablauf:
      vorher gibt es keine technische Prüfung, nur passive OSINT-Anreicherung.
 """
 
+import os
 import re
 import json
+import secrets
 import socket
 import ssl
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 
 from models import db_query, db_execute
 from payments import PUBLIC_BASE_URL
+import mailer
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; AndriiIT-LeadFinder/1.0; +https://andrii-it.de)",
@@ -694,3 +697,135 @@ def _background_loop(branches: list[str]) -> None:
     finally:
         with _state_lock:
             _state.update(running=False, current_branche=None, current_city=None)
+
+
+# ── Automatischer Versand (Start/Stop über Admin-UI) ───────────────────────────
+# Sendet Einladungs-Mails an gefundene Leads (status='found', E-Mail vorhanden) —
+# sowohl den bestehenden Backlog als auch neu von der Suche gefundene Leads (diese
+# Loop läuft dauerhaft und holt sich laufend nach, was die Suche findet). Bewusst
+# eine EIGENE Pacing-Schleife getrennt von der Suche, damit die Sende-Rate klar an
+# einer Stelle kontrolliert wird (Tageslimit + Mindestabstand pro Mail).
+
+SEND_INTERVAL_SECONDS = int(os.environ.get("LEAD_SEND_INTERVAL_SECONDS", "60"))
+SEND_DAILY_CAP = int(os.environ.get("LEAD_SEND_DAILY_CAP", "150"))
+
+_send_lock = threading.Lock()
+_send_stop_event = threading.Event()
+_send_state = {
+    "running": False,
+    "sent_total": 0,
+    "started_at": None,
+    "last_error": None,
+    "last_sent_company": None,
+}
+
+
+def get_send_status() -> dict:
+    with _send_lock:
+        status = dict(_send_state)
+    status["sent_last_24h"] = _sends_last_24h()
+    status["daily_cap"] = SEND_DAILY_CAP
+    status["interval_seconds"] = SEND_INTERVAL_SECONDS
+    return status
+
+
+def is_sending() -> bool:
+    with _send_lock:
+        return _send_state["running"]
+
+
+def _sends_last_24h() -> int:
+    cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+    return db_query(
+        "SELECT COUNT(*) as n FROM leads WHERE emailed_at IS NOT NULL AND emailed_at > ?",
+        (cutoff,),
+    )[0]["n"]
+
+
+def send_one_lead(lead_id: int) -> bool:
+    """Analysiert (falls noch nicht geschehen) und sendet die Einladungs-Mail für
+    genau einen Lead. Gibt True bei Erfolg zurück, wirft bei Fehler (z.B. SMTP)."""
+    rows = db_query("SELECT * FROM leads WHERE id=?", (lead_id,))
+    if not rows:
+        return False
+    lead = dict(rows[0])
+    if not lead.get("email"):
+        return False
+
+    if not lead.get("scan_result"):
+        analyze_lead(lead_id)
+        lead = dict(db_query("SELECT * FROM leads WHERE id=?", (lead_id,))[0])
+
+    token = secrets.token_urlsafe(24)
+    subject, body = build_outreach_email(lead, token, PUBLIC_BASE_URL)
+    mailer.send_email(lead["email"], subject, body)
+    db_execute(
+        "UPDATE leads SET lead_token=?,status='emailed',emailed_at=?,draft_subject=?,draft_body=? WHERE id=?",
+        (token, datetime.now().isoformat(), subject, body, lead_id),
+    )
+    return True
+
+
+def start_send_backlog() -> bool:
+    with _send_lock:
+        if _send_state["running"]:
+            return False
+        _send_stop_event.clear()
+        _send_state.update(running=True, sent_total=0, started_at=datetime.now().isoformat(),
+                            last_error=None, last_sent_company=None)
+    thread = threading.Thread(target=_send_backlog_loop, daemon=True)
+    thread.start()
+    return True
+
+
+def stop_send_backlog() -> None:
+    _send_stop_event.set()
+
+
+def _send_backlog_loop() -> None:
+    try:
+        while not _send_stop_event.is_set():
+            if _sends_last_24h() >= SEND_DAILY_CAP:
+                with _send_lock:
+                    _send_state["last_error"] = f"Tageslimit ({SEND_DAILY_CAP}/24h) erreicht — pausiert"
+                for _ in range(1800):  # 30 Min. warten, dabei stoppbar bleiben
+                    if _send_stop_event.is_set():
+                        return
+                    time.sleep(1)
+                continue
+
+            pending = db_query(
+                "SELECT id,company FROM leads WHERE status='found' AND email IS NOT NULL "
+                "AND email!='' ORDER BY id LIMIT 1"
+            )
+            if not pending:
+                # Backlog aktuell leer — weiter warten, falls die Suche parallel noch
+                # neue Leads findet. Läuft weiter, bis explizit gestoppt.
+                with _send_lock:
+                    _send_state["last_error"] = None
+                for _ in range(30):
+                    if _send_stop_event.is_set():
+                        return
+                    time.sleep(1)
+                continue
+
+            lid, company = pending[0]["id"], pending[0]["company"]
+            try:
+                if send_one_lead(lid):
+                    with _send_lock:
+                        _send_state["sent_total"] += 1
+                        _send_state["last_sent_company"] = company
+            except Exception as e:
+                with _send_lock:
+                    _send_state["last_error"] = f"{company}: {e}"
+                # Als Fehler markieren, damit dieselbe (defekte) Adresse nicht jede
+                # Runde erneut versucht wird und die Schleife blockiert.
+                db_execute("UPDATE leads SET status='error' WHERE id=?", (lid,))
+
+            for _ in range(SEND_INTERVAL_SECONDS):
+                if _send_stop_event.is_set():
+                    return
+                time.sleep(1)
+    finally:
+        with _send_lock:
+            _send_state["running"] = False

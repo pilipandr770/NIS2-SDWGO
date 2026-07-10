@@ -188,8 +188,11 @@ def edit_client(cid):
 @app.route("/leads")
 @login_required
 def leads():
-    rows = db_query("SELECT * FROM leads ORDER BY created_at DESC")
-    return render_template("leads.html", leads=rows, search_status=lead_finder.get_status())
+    rows = db_query("SELECT * FROM leads ORDER BY created_at DESC LIMIT 200")
+    counts = {r["status"]: r["n"] for r in db_query("SELECT status, COUNT(*) as n FROM leads GROUP BY status")}
+    return render_template("leads.html", leads=rows, counts=counts,
+                            search_status=lead_finder.get_status(),
+                            send_status=lead_finder.get_send_status())
 
 @app.route("/leads/start", methods=["POST"])
 @login_required
@@ -213,6 +216,29 @@ def stop_leads_search():
 @login_required
 def leads_status():
     return jsonify(lead_finder.get_status())
+
+@app.route("/leads/start-sending", methods=["POST"])
+@login_required
+def start_leads_sending():
+    started = lead_finder.start_send_backlog()
+    if started:
+        flash(f"Automatischer Versand gestartet — max. {lead_finder.SEND_DAILY_CAP}/24h, "
+              f"1 Mail alle {lead_finder.SEND_INTERVAL_SECONDS}s", "success")
+    else:
+        flash("Versand läuft bereits", "danger")
+    return redirect(url_for("leads"))
+
+@app.route("/leads/stop-sending", methods=["POST"])
+@login_required
+def stop_leads_sending():
+    lead_finder.stop_send_backlog()
+    flash("Versand wird gestoppt …", "success")
+    return redirect(url_for("leads"))
+
+@app.route("/leads/sending-status")
+@login_required
+def leads_sending_status():
+    return jsonify(lead_finder.get_send_status())
 
 @app.route("/leads/<int:lid>/preview", methods=["POST"])
 @login_required
