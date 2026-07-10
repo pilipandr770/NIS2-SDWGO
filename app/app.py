@@ -214,6 +214,16 @@ def stop_leads_search():
 def leads_status():
     return jsonify(lead_finder.get_status())
 
+@app.route("/leads/<int:lid>/preview", methods=["POST"])
+@login_required
+def preview_lead_email(lid):
+    try:
+        lead_finder.analyze_lead(lid)
+        flash("Vorschau erstellt — bitte prüfen und ggf. anpassen vor dem Versand", "success")
+    except Exception as e:
+        flash(f"Fehler bei der Analyse: {e}", "danger")
+    return redirect(url_for("leads"))
+
 @app.route("/leads/<int:lid>/send", methods=["POST"])
 @login_required
 def send_lead_email(lid):
@@ -226,7 +236,14 @@ def send_lead_email(lid):
         return redirect(url_for("leads"))
 
     token = secrets.token_urlsafe(24)
-    subject, body = lead_finder.build_outreach_email(lead, token, payments.PUBLIC_BASE_URL)
+    subject = request.form.get("subject", "").strip() or lead["draft_subject"]
+    body = request.form.get("body", "").strip() or lead["draft_body"]
+    if not subject or not body:
+        subject, body = lead_finder.build_outreach_email(dict(lead), token, payments.PUBLIC_BASE_URL)
+    else:
+        # Link im (ggf. editierten) Text auf den echten Versand-Token umschreiben
+        body = re.sub(r"https?://\S+/lead/\S+", f"{payments.PUBLIC_BASE_URL}/lead/{token}", body)
+
     try:
         mailer.send_email(lead["email"], subject, body)
         db_execute("UPDATE leads SET lead_token=?,status='emailed',emailed_at=? WHERE id=?",
@@ -243,7 +260,14 @@ def lead_landing(token):
     lead = db_query("SELECT * FROM leads WHERE lead_token=?", (token,))
     if not lead:
         abort(404)
-    return render_template("lead_landing.html", lead=lead[0])
+    lead = lead[0]
+    findings = []
+    if lead["scan_result"]:
+        try:
+            findings = json.loads(lead["scan_result"]).get("findings", [])
+        except Exception:
+            findings = []
+    return render_template("lead_landing.html", lead=lead, findings=findings)
 
 @app.route("/lead/<token>/confirm", methods=["POST"])
 def lead_confirm(token):
@@ -253,7 +277,12 @@ def lead_confirm(token):
     lead = lead[0]
 
     if not request.form.get("owner_confirmed"):
-        flash("Bitte bestätigen Sie, dass Sie zur Anforderung berechtigt sind.", "danger")
+        flash("Bitte bestätigen Sie, dass Sie zur Beauftragung berechtigt sind.", "danger")
+        return redirect(url_for("lead_landing", token=token))
+
+    target = request.form.get("target", "").strip() or lead["domain"]
+    if not is_public_target(target):
+        flash("Bitte geben Sie eine öffentlich erreichbare Domain oder IP an.", "danger")
         return redirect(url_for("lead_landing", token=token))
 
     email = lead["email"] or f"lead-{lead['id']}@platzhalter.invalid"
@@ -264,14 +293,16 @@ def lead_confirm(token):
         client_id = db_execute(
             "INSERT INTO clients (company,contact,email,phone,address,notes,created_at) VALUES (?,?,?,?,?,?,?)",
             (lead["company"], lead["contact"], email, lead["phone"], lead["address"],
-             "Angelegt über Lead-Finder (Kassensystem-Check)", datetime.now().isoformat()),
+             "Angelegt über Lead-Finder (Kassensystem-Zielgruppe)", datetime.now().isoformat()),
         )
 
+    confirm_token = secrets.token_urlsafe(24)
     order_id = db_execute(
-        """INSERT INTO orders (client_id,target,amount,scope,notes,status,check_type,created_at,updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (client_id, lead["domain"], "0", "Kostenloser Kassensystem-Sicherheitscheck (Lead)",
-         f"Lead #{lead['id']} — Branche: {lead['branche']}", "confirmed", "kassen",
+        """INSERT INTO orders (client_id,target,amount,scope,notes,status,check_type,confirm_token,created_at,updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (client_id, target, "100",
+         "Vollständige Sicherheitsprüfung (Blackbox-Pentest) — vom Auftraggeber selbst bestätigtes Ziel",
+         f"Lead #{lead['id']} — Branche: {lead['branche']}", "angebot", "audit", confirm_token,
          datetime.now().isoformat(), datetime.now().isoformat()),
     )
     create_order_tasks(order_id)
@@ -279,8 +310,15 @@ def lead_confirm(token):
     db_execute("UPDATE leads SET status='confirmed',responded_at=?,client_id=?,order_id=? WHERE id=?",
                (datetime.now().isoformat(), client_id, order_id, lead["id"]))
 
-    _launch_check_for_order(order_id, "kassen", lead["domain"], lead["company"])
-    return render_template("lead_landing.html", lead=lead, confirmed=True)
+    order = db_query("""SELECT o.*, c.company, c.email FROM orders o
+                         JOIN clients c ON c.id=o.client_id WHERE o.id=?""", (order_id,))[0]
+    try:
+        checkout_url = payments.create_checkout_session(dict(order))
+        return redirect(checkout_url)
+    except payments.PaymentsNotConfigured:
+        flash("Vielen Dank! Wir haben Ihre Anfrage erhalten und melden uns in Kürze mit den "
+              "Zahlungsdetails.", "success")
+        return render_template("lead_landing.html", lead=lead, findings=[], confirmed=True)
 
 # ── Angebot ───────────────────────────────────────────────────────────────────
 @app.route("/angebot/new", methods=["GET","POST"])

@@ -227,6 +227,17 @@ def migrate_db():
         if col not in order_cols:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {coldef}")
             conn.commit()
+
+    lead_cols = {row[1] for row in conn.execute("PRAGMA table_info(leads)").fetchall()}
+    for col, coldef in [
+        ("scan_result", "TEXT"),
+        ("business_context", "TEXT"),
+        ("draft_subject", "TEXT"),
+        ("draft_body", "TEXT"),
+    ]:
+        if col not in lead_cols:
+            conn.execute(f"ALTER TABLE leads ADD COLUMN {col} {coldef}")
+            conn.commit()
     conn.close()
 
 

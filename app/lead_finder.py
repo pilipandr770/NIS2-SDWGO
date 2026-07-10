@@ -18,6 +18,8 @@ Ablauf:
 
 import re
 import json
+import socket
+import ssl
 import threading
 import time
 from datetime import datetime
@@ -25,6 +27,7 @@ from datetime import datetime
 import requests
 
 from models import db_query, db_execute
+from payments import PUBLIC_BASE_URL
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; AndriiIT-LeadFinder/1.0; +https://andrii-it.de)",
@@ -218,15 +221,22 @@ def _parse_impressum(base_url: str) -> dict:
 
         text = _clean_html(resp.text)
 
+        RESPONSIBLE_TITLES = (r"Inhaber(?:in)?|Geschäftsführer(?:in)?|Herausgeber(?:in)?|"
+                              r"Vorstand(?:svorsitzende[rn]?)?|Vorsitzende[rn]?|Leitung|"
+                              r"Ansprechpartner(?:in)?|Verantwortlich(?:er|e)? (?:im Sinne des )?"
+                              r"(?:§\s?5\s?TMG|Presserechts?)?|Betreiber(?:in)?")
         for pattern, salutation, group in [
-            (r"(?:Inhaber(?:in)?|Geschäftsführer(?:in)?|Herausgeber(?:in)?):?\s+"
+            (rf"(?:{RESPONSIBLE_TITLES}):?\s+"
              r"((?:Herr|Frau)\s+[A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+){0,3})", "detected", 1),
             (r"\b(Herr)\s+([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+){1,3})", "Herr", 2),
             (r"\b(Frau)\s+([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+){1,3})", "Frau", 2),
+            # Fallback: Titel gefolgt von Name ohne Anrede (z.B. "Vorstand: Max Mustermann")
+            (rf"(?:{RESPONSIBLE_TITLES}):?\s+"
+             r"([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+){1,2})", "unbekannt", 1),
         ]:
             m = re.search(pattern, text)
             if m:
-                if salutation == "detected":
+                if salutation in ("detected", "unbekannt"):
                     full = m.group(group).strip()
                     if full.startswith("Herr"):
                         info["salutation"], info["owner_name"] = "Herr", full[4:].strip()
@@ -319,36 +329,252 @@ def save_leads(leads: list[dict]) -> int:
     return saved
 
 
+FINDING_TEMPLATES = {
+    "missing_headers": {
+        "title": "Ihre Website versendet keine modernen Sicherheits-Header (z.B. Content-Security-Policy)",
+        "hacker": "Ohne diese Header sind Angriffe wie Clickjacking oder das Einschleusen "
+                  "fremden Codes (Cross-Site-Scripting) deutlich leichter umzusetzen.",
+        "legal": "Nach Art. 32 DSGVO sind angemessene technische Schutzmaßnahmen Pflicht — "
+                 "bei einem Datenvorfall kann das Fehlen solcher Basics als Versäumnis gewertet werden.",
+    },
+    "exposed_version": {
+        "title": "Ihre Website verrät die genaue Software-Version im Klartext ({detail})",
+        "hacker": "Angreifer suchen gezielt nach bekannten Sicherheitslücken für exakt diese "
+                  "Version — das verkürzt die Vorbereitung eines Angriffs erheblich.",
+        "legal": "Ein unnötig offengelegter Software-Stand erleichtert gezielte Angriffe und "
+                 "gilt als vermeidbares Risiko im Sinne von Art. 32 DSGVO.",
+    },
+    "exposed_git": {
+        "title": "Ein Git-Repository (.git) ist öffentlich über Ihre Website erreichbar",
+        "hacker": "Darüber lässt sich häufig der komplette Quellcode inklusive alter "
+                  "Zugangsdaten oder interner Kommentare herunterladen.",
+        "legal": "Ein offenes Repository kann personenbezogene Daten oder Zugangsdaten "
+                 "enthalten — ein klassischer Fall für ein meldepflichtiges Datenleck (Art. 33 DSGVO).",
+    },
+    "exposed_env": {
+        "title": "Eine Konfigurationsdatei (.env) mit möglichen Zugangsdaten ist öffentlich abrufbar",
+        "hacker": "Solche Dateien enthalten oft Datenbank-Passwörter oder API-Schlüssel — "
+                  "damit lässt sich direkt auf interne Systeme zugreifen.",
+        "legal": "Der Verlust von Zugangsdaten ist ein melde­pflichtiger Sicherheitsvorfall "
+                 "nach Art. 33/34 DSGVO — Bußgelder bis 20 Mio. € bzw. 4 % des Jahresumsatzes sind möglich.",
+    },
+    "weak_ssl": {
+        "title": "Die Verschlüsselung Ihrer Website (TLS/SSL) ist veraltet oder das Zertifikat läuft bald ab",
+        "hacker": "Veraltete Verschlüsselung lässt sich mit heutiger Rechenleistung leichter "
+                  "kompromittieren — Angreifer könnten Daten Ihrer Kunden mitlesen.",
+        "legal": "Eine unsichere Übertragung personenbezogener Daten verstößt gegen die in "
+                 "Art. 32 DSGVO geforderte Verschlüsselung.",
+    },
+    "outdated_copyright": {
+        "title": "Ihre Website wirkt seit mehreren Jahren nicht mehr aktualisiert",
+        "hacker": "Länger nicht gepflegte Websites laufen häufig auf veralteter, ungepatchter "
+                  "Software — ein bevorzugtes Ziel für automatisierte Angriffs-Scans.",
+        "legal": "Fehlende Pflege ist zwar kein eigener Verstoß, korreliert in der Praxis aber "
+                 "stark mit ungepatchten Sicherheitslücken.",
+    },
+    "missing_legal": {
+        "title": "Impressum bzw. Datenschutzerklärung waren auf den üblichen Pfaden nicht auffindbar",
+        "hacker": None,
+        "legal": "Ein fehlendes oder schwer auffindbares Impressum verstößt gegen § 5 TMG, eine "
+                 "fehlende Datenschutzerklärung gegen Art. 13 DSGVO — beides ist bußgeldbewehrt "
+                 "und wird von Wettbewerbern/Verbänden regelmäßig abgemahnt.",
+    },
+}
+
+
+def extract_business_context(html: str) -> str | None:
+    """Extrahiert eine kurze Beschreibung der Geschäftstätigkeit aus Meta-Description,
+    Open-Graph-Description oder Titel — für eine kontextbezogene Anrede im Anschreiben."""
+    for pattern in (
+        r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']{20,200})["\']',
+        r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']{20,200})["\']',
+    ):
+        m = re.search(pattern, html, re.IGNORECASE)
+        if m:
+            text = _clean_html(m.group(1)).strip()
+            if len(text) > 15:
+                return text[:180]
+
+    title_m = re.search(r"<title[^>]*>([^<]{5,120})</title>", html, re.IGNORECASE)
+    if title_m:
+        text = _clean_html(title_m.group(1)).strip()
+        if len(text) > 5:
+            return text[:120]
+    return None
+
+
+def _check_ssl(domain: str) -> dict | None:
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((domain, 443), timeout=6) as sock:
+            with ctx.wrap_socket(sock, server_hostname=domain) as ssock:
+                cert = ssock.getpeercert()
+                version = ssock.version()
+        not_after = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
+        days_left = (not_after - datetime.now()).days
+        return {"version": version, "days_left": days_left}
+    except Exception:
+        return None
+
+
+def light_scan(domain: str) -> dict:
+    """Passiver Website-Check (kein Kassensystem!) — liest nur, was jeder Browser auch
+    sieht: HTTP-Header, öffentlich abrufbare Pfade, SSL-Zertifikat, Impressum-Erreichbarkeit.
+    Rechtliche Grundlage identisch zur bestehenden OSINT-Anreicherung (passiv, §202a StGB-konform)."""
+    findings = []
+    html, base_url, headers = "", None, {}
+    for scheme in ("https://", "http://"):
+        try:
+            resp = requests.get(f"{scheme}{domain}", headers=HEADERS, timeout=8, allow_redirects=True)
+            html, base_url, headers = resp.text, f"{scheme}{domain}", resp.headers
+            break
+        except Exception:
+            continue
+
+    if base_url is None:
+        return {"findings": [], "checked_at": datetime.now().isoformat()}
+
+    missing = [h for h in ("Content-Security-Policy", "X-Content-Type-Options",
+                            "X-Frame-Options", "Strict-Transport-Security") if h not in headers]
+    if len(missing) >= 2:
+        findings.append({"id": "missing_headers", **FINDING_TEMPLATES["missing_headers"]})
+
+    for hdr in ("Server", "X-Powered-By"):
+        val = headers.get(hdr, "")
+        if re.search(r"/[\d.]+", val):
+            f = dict(FINDING_TEMPLATES["exposed_version"])
+            f["title"] = f["title"].format(detail=val)
+            findings.append({"id": "exposed_version", **f})
+            break
+
+    try:
+        r = requests.get(f"{base_url}/.git/HEAD", headers=HEADERS, timeout=5)
+        if r.status_code == 200 and "ref:" in r.text.lower():
+            findings.append({"id": "exposed_git", **FINDING_TEMPLATES["exposed_git"]})
+    except Exception:
+        pass
+
+    try:
+        r = requests.get(f"{base_url}/.env", headers=HEADERS, timeout=5)
+        if r.status_code == 200 and re.search(r"^[A-Z_]+=", r.text, re.MULTILINE):
+            findings.append({"id": "exposed_env", **FINDING_TEMPLATES["exposed_env"]})
+    except Exception:
+        pass
+
+    if base_url.startswith("https://"):
+        ssl_info = _check_ssl(domain)
+        if ssl_info and (ssl_info["days_left"] < 30 or ssl_info["version"] in ("TLSv1", "TLSv1.1")):
+            findings.append({"id": "weak_ssl", **FINDING_TEMPLATES["weak_ssl"]})
+
+    year_m = re.search(r"(?:©|Copyright)\s*(\d{4})", html)
+    if year_m and datetime.now().year - int(year_m.group(1)) >= 3:
+        findings.append({"id": "outdated_copyright", **FINDING_TEMPLATES["outdated_copyright"]})
+
+    legal_found = False
+    for path in ("/impressum", "/datenschutz", "/impressum.html", "/datenschutzerklaerung"):
+        try:
+            r = requests.get(f"{base_url}{path}", headers=HEADERS, timeout=5)
+            if r.status_code == 200 and len(r.text) > 100:
+                legal_found = True
+                break
+        except Exception:
+            continue
+    if not legal_found:
+        findings.append({"id": "missing_legal", **FINDING_TEMPLATES["missing_legal"]})
+
+    return {"findings": findings, "checked_at": datetime.now().isoformat()}
+
+
+def analyze_lead(lead_id: int) -> dict:
+    """Führt den leichten Website-Check + Kontext-Extraktion für einen Lead aus und
+    speichert das Ergebnis persistent (für Vorschau/Bearbeitung vor dem Versand)."""
+    lead = db_query("SELECT * FROM leads WHERE id=?", (lead_id,))
+    if not lead:
+        raise ValueError("Lead nicht gefunden")
+    lead = dict(lead[0])
+
+    scan = light_scan(lead["domain"])
+    business_context = None
+    for scheme in ("https://", "http://"):
+        try:
+            resp = requests.get(f"{scheme}{lead['domain']}", headers=HEADERS, timeout=8)
+            business_context = extract_business_context(resp.text)
+            break
+        except Exception:
+            continue
+
+    db_execute(
+        "UPDATE leads SET scan_result=?,business_context=? WHERE id=?",
+        (json.dumps(scan, ensure_ascii=False), business_context, lead_id),
+    )
+    lead["scan_result"] = json.dumps(scan, ensure_ascii=False)
+    lead["business_context"] = business_context
+
+    subject, body = build_outreach_email(lead, "PREVIEW", PUBLIC_BASE_URL)
+    db_execute("UPDATE leads SET draft_subject=?,draft_body=? WHERE id=?", (subject, body, lead_id))
+    return {"scan": scan, "business_context": business_context, "subject": subject, "body": body}
+
+
 def build_outreach_email(lead: dict, lead_token: str, base_url: str) -> tuple[str, str]:
-    """Baut Betreff + Text der Einladungs-Mail (kostenloser Kassensystem-Check)."""
+    """Baut Betreff + Text der Einladungs-Mail. Nutzt vorhandene Scan-Befunde und
+    Geschäftskontext für ein persönliches, konkretes Anschreiben statt einer generischen
+    Massen-Mail-Vorlage. Fällt auf einen knappen generischen Text zurück, falls noch kein
+    Scan durchgeführt wurde (siehe analyze_lead)."""
     salutation, contact = lead.get("salutation"), lead.get("contact")
     if contact and salutation == "Herr":
         greeting = f"Sehr geehrter Herr {contact},"
     elif contact and salutation == "Frau":
         greeting = f"Sehr geehrte Frau {contact},"
+    elif contact:
+        greeting = f"Sehr geehrte(r) {contact},"
     else:
         greeting = "Sehr geehrte Damen und Herren,"
 
     link = f"{base_url}/lead/{lead_token}"
-    subject = f"Kostenloser Kassensystem-Sicherheitscheck für {lead['company']}"
+    subject = f"Sicherheitshinweis zu {lead['company']} — kostenlose Prüfung möglich"
+
+    scan_raw = lead.get("scan_result")
+    findings = json.loads(scan_raw)["findings"] if scan_raw else []
+    business_context = lead.get("business_context")
+
+    context_line = ""
+    if business_context:
+        context_line = f"Ich bin auf {lead['company']} aufmerksam geworden ({business_context}).\n\n"
+
+    if findings:
+        top = findings[:2]
+        findings_lines = "\n".join(f"  • {f['title']}" for f in top)
+        consequence = next((f["legal"] for f in top if f.get("legal")), None)
+        hacker = next((f["hacker"] for f in top if f.get("hacker")), None)
+
+        findings_block = f"""Bei einer rein passiven Prüfung Ihrer öffentlich erreichbaren Website
+(keine Anmeldung, keine Verbindung zu internen Systemen) ist mir aufgefallen:
+
+{findings_lines}
+"""
+        if hacker:
+            findings_block += f"\nKonkret bedeutet das: {hacker}\n"
+        if consequence:
+            findings_block += f"\nRechtlich relevant: {consequence}\n"
+    else:
+        findings_block = ("Betriebe in Gastronomie und Einzelhandel setzen häufig Kassensysteme "
+                           "(POS) ein, die über Fernwartung oder Cloud-Anbindung versehentlich im "
+                           "Internet sichtbar sind — oft ohne dass der Betreiber davon weiß.\n")
 
     body = f"""{greeting}
 
 mein Name ist Andrii Pylypchuk, ich bin IT-Sicherheitsberater aus Frankfurt am Main
-(andrii-it.de) und beschäftige mich mit der Absicherung von Kassensystemen im
-Einzelhandel und der Gastronomie im Rahmen der NIS2-Richtlinie.
+(andrii-it.de) und beschäftige mich mit der Absicherung von Kassensystemen und
+Webauftritten im Rahmen der NIS2-Richtlinie.
 
-Viele Kassensysteme (POS) sind über öffentlich erreichbare Dienste (Fernwartung,
-Cloud-Anbindung) versehentlich im Internet sichtbar — oft ohne dass der Betreiber
-davon weiß. Das lässt sich mit rein passiven, öffentlich einsehbaren Daten prüfen
-(keine Verbindung zu Ihrer Kasse selbst, keine Beeinträchtigung des Betriebs).
-
-Ich biete Ihnen dazu einen kostenlosen, passiven Kassensystem-Sicherheitscheck an:
+{context_line}{findings_block}
+Ich biete Ihnen dazu eine kostenlose, unverbindliche Ersteinschätzung an — rein passiv,
+ohne jede Beeinträchtigung Ihres Betriebs:
 
   {link}
 
-Dort können Sie den Check mit einem Klick anfordern. Sie erhalten anschließend eine
-Übersicht möglicher Befunde — unverbindlich und ohne Kosten.
+Dort sehen Sie die Details und können bei Interesse eine vollständige Sicherheitsprüfung
+mit schriftlichem Bericht beauftragen.
 
 Falls Sie keine weiteren Nachrichten dieser Art erhalten möchten, teilen Sie mir das
 einfach per Antwort-E-Mail mit — ich entferne Sie dann aus meiner Liste.
