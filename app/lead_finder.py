@@ -530,7 +530,10 @@ def build_outreach_email(lead: dict, lead_token: str, base_url: str) -> tuple[st
     else:
         greeting = "Sehr geehrte Damen und Herren,"
 
-    link = f"{base_url}/lead/{lead_token}"
+    # Link führt zuerst auf die vertrauenswürdige Landing-Page der Hauptdomain
+    # (andrii-it.de), NICHT direkt auf das interne Audit-Tool-Subdomain — von dort
+    # geht es per Klick weiter zur eigentlichen Consent-/Zahlungsseite.
+    link = f"https://andrii-it.de/kassencheck/{lead_token}"
     subject = f"Sicherheitshinweis zu {lead['company']} — kostenlose Prüfung möglich"
 
     scan_raw = lead.get("scan_result")
@@ -582,7 +585,7 @@ einfach per Antwort-E-Mail mit — ich entferne Sie dann aus meiner Liste.
 Mit freundlichen Grüßen
 Andrii Pylypchuk
 IT-Sicherheitsberater, Frankfurt am Main
-{base_url}
+https://andrii-it.de
 """
     return subject, body
 
