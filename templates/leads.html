@@ -127,7 +127,9 @@
         {% if l.business_context %}<div class="card-sub" style="font-size:11px;color:var(--text3);font-style:italic">{{ l.business_context }}</div>{% endif %}
       </div>
       <div class="card-right" style="gap:10px;display:flex;align-items:center">
-        <span class="badge badge-{{ 'done' if l.status=='confirmed' else ('info' if l.status=='emailed' else ('critical' if l.status=='error' else 'angebot')) }}">{{ l.status }}</span>
+        {% set badge_map = {'confirmed':'done','emailed':'info','error':'critical','bounced':'high','opted_out':'medium'} %}
+        <span class="badge badge-{{ badge_map.get(l.status, 'angebot') }}">{{ l.status }}</span>
+        {% if l.reply_snippet %}<span title="{{ l.reply_snippet }}" style="font-size:11px;color:var(--accent)">💬 Antwort</span>{% endif %}
         <span style="font-size:11px;color:var(--text3)">{{ l.branche or '' }}</span>
         {% if l.status == 'emailed' %}
           <span style="font-size:11px;color:var(--text3)">gesendet {{ l.emailed_at[:10] if l.emailed_at else '' }}</span>

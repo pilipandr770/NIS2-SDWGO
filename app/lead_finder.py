@@ -872,7 +872,7 @@ def build_daily_summary() -> tuple[str, str]:
         "",
         "Status-Übersicht (gesamt):",
     ]
-    for status in ("found", "emailed", "confirmed", "bounced", "error"):
+    for status in ("found", "emailed", "confirmed", "bounced", "opted_out", "error"):
         lines.append(f"  {status}: {counts.get(status, 0)}")
     lines.append("")
 
@@ -896,7 +896,8 @@ def build_daily_summary() -> tuple[str, str]:
         lines.append(
             f"Postfach geprüft: {inbox_result['checked']} Nachrichten gesichtet, "
             f"{inbox_result['bounces_found']} Bounces / {inbox_result['replies_found']} "
-            f"Antworten neu erkannt."
+            f"Antworten neu erkannt ({inbox_result.get('converted', 0)} automatisch als Kunde "
+            f"angelegt + Angebot gesendet, {inbox_result.get('opted_out', 0)} Opt-out)."
         )
 
     return subject, "\n".join(lines)
