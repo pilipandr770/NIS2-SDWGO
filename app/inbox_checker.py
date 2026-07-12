@@ -50,6 +50,17 @@ OPT_OUT_HINTS = (
     "keine mails mehr", "keine e-mails mehr", "entfernen sie mich", "unsubscribe",
     "remove me", "no longer contact", "stop contacting", "bitte nicht mehr",
 )
+# Automatische Antworten (Autoresponder, Abwesenheitsnotiz, Ticketsystem-Bestätigung) sind
+# KEIN echtes Interesse eines Menschen — dürfen NICHT automatisch konvertiert werden.
+AUTOREPLY_HEADER_HINTS = ("auto-replied", "auto-generated", "auto-submitted")
+AUTOREPLY_BODY_HINTS = (
+    "automatische antwort", "automatisch generiert", "automatisch erstellt",
+    "out of office", "out-of-office", "abwesenheitsnotiz", "abwesend bis",
+    "derzeit nicht im büro", "currently out of the office", "wir werden uns zeitnah",
+    "wir werden uns in kürze", "wir melden uns in kürze", "ihre anfrage wurde erfasst",
+    "ticket wurde erstellt", "ticket-nummer", "diese nachricht wurde automatisch",
+    "this is an automated", "auto-reply", "autoresponder",
+)
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 
@@ -132,7 +143,8 @@ def check_inbox(lookback_days: int = 2) -> dict:
     for l in sent_leads:
         by_email.setdefault(l["email"].lower(), []).append(l)
 
-    result = {"bounces_found": 0, "replies_found": 0, "checked": 0, "converted": 0, "opted_out": 0}
+    result = {"bounces_found": 0, "replies_found": 0, "checked": 0, "converted": 0,
+               "opted_out": 0, "autoreplies_found": 0}
     if not by_email:
         return result
 
@@ -157,6 +169,8 @@ def check_inbox(lookback_days: int = 2) -> dict:
             from_header = _decode(msg.get("From", "")).lower()
             subject = _decode(msg.get("Subject", "")).lower()
             body = _extract_body(msg)
+            auto_submitted_header = (msg.get("Auto-Submitted", "") + msg.get("X-Autoreply", "") +
+                                      msg.get("X-Autorespond", "") + msg.get("Precedence", "")).lower()
 
             is_bounce = any(h in from_header for h in BOUNCE_SENDER_HINTS) or \
                         any(h in subject for h in BOUNCE_SUBJECT_HINTS)
@@ -184,6 +198,10 @@ def check_inbox(lookback_days: int = 2) -> dict:
                     new_text = _strip_quoted(body)
                     snippet = " ".join(new_text.split())[:300]
                     is_opt_out = any(h in new_text.lower() or h in subject for h in OPT_OUT_HINTS)
+                    is_autoreply = (
+                        any(h in auto_submitted_header for h in AUTOREPLY_HEADER_HINTS)
+                        or any(h in new_text.lower() or h in subject for h in AUTOREPLY_BODY_HINTS)
+                    )
                     for lead in by_email[addr_l]:
                         db_execute(
                             "UPDATE leads SET replied_at=?,reply_snippet=? WHERE id=? AND replied_at IS NULL",
@@ -193,6 +211,10 @@ def check_inbox(lookback_days: int = 2) -> dict:
                         if is_opt_out:
                             db_execute("UPDATE leads SET status='opted_out' WHERE id=?", (lead["id"],))
                             result["opted_out"] += 1
+                        elif is_autoreply:
+                            # Kein Mensch hat das gelesen — NICHT konvertieren, nur zur
+                            # manuellen Sichtung markiert lassen (bleibt status='emailed').
+                            result["autoreplies_found"] = result.get("autoreplies_found", 0) + 1
                         else:
                             try:
                                 if _auto_convert_lead(lead["id"], snippet):
