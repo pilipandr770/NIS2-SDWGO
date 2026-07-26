@@ -345,9 +345,9 @@ def _cross_validate_findings(findings: list, live: dict) -> list:
             # Header present AND correctly configured → Scanner-Befund war ein Fehlalarm
             note = (f"[Live-Check: Header '{targeted_header}' ist korrekt konfiguriert "
                     f"(Wert: {live_status['value'][:60]}). "
-                    "Der urspruengliche Befund war ein Fehlalarm des Scan-Tools, moeglich durch "
+                    "Der ursprüngliche Befund war ein Fehlalarm des Scan-Tools, möglich durch "
                     "CDN/Reverse-Proxy (z. B. Cloudflare). Live-Check-Ergebnisse in Abschnitt 3 "
-                    "sind massgeblich.]")
+                    "sind maßgeblich.]")
             f["severity"] = "info"
             f["cvss"]     = ""
             f["description"] = f.get("description", "") + " " + note
@@ -356,8 +356,8 @@ def _cross_validate_findings(findings: list, live: dict) -> list:
             # KEIN Scan-Artefakt: Severity bleibt, nur der Titel wird von "fehlt" korrigiert.
             note = (f"[Live-Check: Header '{targeted_header}' ist vorhanden, aber schwach "
                     f"konfiguriert (Wert: {live_status['value'][:60]}). Dies ist keine "
-                    "Fehlmeldung des Scanners, sondern eine bestaetigte Schwachstelle — "
-                    "die Bewertung in Abschnitt 3 und diesem Befund stimmen ueberein.]")
+                    "Fehlmeldung des Scanners, sondern eine bestätigte Schwachstelle — "
+                    "die Bewertung in Abschnitt 3 und diesem Befund stimmen überein.]")
             f["description"] = f.get("description", "") + " " + note
             title = f.get("title", "")
             for bad_phrase in ["fehlt vollständig", "fehlt", "nicht konfiguriert", "nicht gesetzt"]:
