@@ -7,11 +7,18 @@ wie für den Versand) auf:
   1. Bounce-Benachrichtigungen (Zustellung fehlgeschlagen) — automatischer
      Abgleich der enthaltenen E-Mail-Adressen gegen versendete Leads.
   2. Echte Antworten von Leads — Absender-Adresse entspricht einem Lead, der
-     bereits angeschrieben wurde (kein Bounce-Absender). Enthält die Antwort
-     ein Opt-out ("bitte keine weiteren Mails"), wird der Lead nur markiert
-     und NICHT konvertiert. Jede andere Antwort gilt als Interesse und wird
-     automatisch zum Kunden + Standard-Angebot konvertiert (Zahlungslink per
-     Mail) — volle Automatisierung, siehe _auto_convert_lead().
+     bereits angeschrieben wurde (kein Bounce-Absender). Die Antwort wird
+     per LLM-Klassifikation (siehe classify_reply_intent) eingeordnet:
+     NUR bei eindeutigem echtem Interesse wird automatisch zum Kunden +
+     Standard-Angebot konvertiert (Zahlungslink per Mail), siehe
+     _auto_convert_lead(). Ablehnungen, Autoresponder, Abwesenheitsnotizen,
+     Ticketsystem-Bestätigungen etc. werden NICHT konvertiert.
+
+     Feste Stichwortlisten sind für diese Klassifikation zu unzuverlässig
+     (Live-Vorfall: eine explizite Ablehnung eines Großkunden ["lehnen solche
+     Anfragen grundsätzlich ab"] wurde fälschlich als Interesse gewertet,
+     ebenso zwei Abwesenheitsnotizen ohne die erwarteten Schlüsselwörter) —
+     daher Klassifikation per Sprachmodell statt Keyword-Matching.
 
 Kein Zugriff auf fremde Postfächer, keine aktive Interaktion mit Absendern —
 rein lesend/reagierend auf tatsächlich eingegangene Antworten.
@@ -25,6 +32,12 @@ import secrets
 from datetime import datetime, timedelta
 from email.header import decode_header
 
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
 from models import db_query, db_execute, create_order_tasks
 from payments import PUBLIC_BASE_URL
 import mailer
@@ -34,6 +47,10 @@ IMAP_PORT = int(os.environ.get("IMAP_PORT", "993"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_APP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@andrii-it.de")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# Reine Klassifikationsaufgabe (5 feste Kategorien) — Haiku reicht dafür völlig aus,
+# anders als bei der offenen Formulierung von Audit-Findings (siehe agent.py).
+CLASSIFY_MODEL = os.environ.get("ANTHROPIC_MODEL_CLASSIFY", "claude-haiku-4-5")
 
 # Standard-Angebot für automatisch konvertierte Leads (Kassensystem-Zielgruppe)
 STANDARD_AMOUNT = "100"
@@ -45,23 +62,67 @@ BOUNCE_SUBJECT_HINTS = (
     "delivery status notification", "undelivered mail", "returned to sender",
     "mail delivery failed", "delivery failure", "nicht zustellbar", "unzustellbar",
 )
-OPT_OUT_HINTS = (
-    "abmelden", "keine weiteren", "aus ihrer liste", "aus der liste", "nicht kontaktieren",
-    "keine mails mehr", "keine e-mails mehr", "entfernen sie mich", "unsubscribe",
-    "remove me", "no longer contact", "stop contacting", "bitte nicht mehr",
-)
-# Automatische Antworten (Autoresponder, Abwesenheitsnotiz, Ticketsystem-Bestätigung) sind
-# KEIN echtes Interesse eines Menschen — dürfen NICHT automatisch konvertiert werden.
+# Nur als schneller, kostenloser Vorfilter für den EINDEUTIGEN technischen Fall
+# (RFC 3834 Header) — die inhaltliche Einordnung macht classify_reply_intent().
 AUTOREPLY_HEADER_HINTS = ("auto-replied", "auto-generated", "auto-submitted")
-AUTOREPLY_BODY_HINTS = (
-    "automatische antwort", "automatisch generiert", "automatisch erstellt",
-    "out of office", "out-of-office", "abwesenheitsnotiz", "abwesend bis",
-    "derzeit nicht im büro", "currently out of the office", "wir werden uns zeitnah",
-    "wir werden uns in kürze", "wir melden uns in kürze", "ihre anfrage wurde erfasst",
-    "ticket wurde erstellt", "ticket-nummer", "diese nachricht wurde automatisch",
-    "this is an automated", "auto-reply", "autoresponder",
-)
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+_CLASSIFY_TOOL = {
+    "name": "classify_reply",
+    "description": "Ordnet die Antwort eines Kaltakquise-Leads in genau eine Kategorie ein",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "intent": {
+                "type": "string",
+                "enum": ["interested", "not_interested", "auto_reply", "opt_out", "unclear"],
+                "description": (
+                    "interested: Mensch zeigt echtes Interesse an der angebotenen Prüfung. "
+                    "not_interested: Mensch lehnt explizit ab (z.B. 'kein Bedarf', "
+                    "'lehnen solche Anfragen ab'), OHNE um Entfernung von der Liste zu bitten. "
+                    "auto_reply: automatisch generiert — Abwesenheitsnotiz, Bürozeiten-Hinweis, "
+                    "Ticketsystem-Bestätigung, 'Wir melden uns' o.ä., erkennbar OHNE echten "
+                    "inhaltlichen Bezug zur eigentlichen Anfrage. "
+                    "opt_out: bittet explizit um Entfernung von der Kontaktliste / keine "
+                    "weiteren Mails. "
+                    "unclear: keine der Kategorien passt eindeutig (z.B. Rückfrage, unklarer "
+                    "Text, reiner HTML/CSS-Datenmüll ohne erkennbaren menschlichen Text)."
+                ),
+            }
+        },
+        "required": ["intent"],
+    },
+}
+
+
+def classify_reply_intent(text: str) -> str:
+    """Klassifiziert eine Lead-Antwort per LLM in eine der 5 Kategorien (siehe Tool-Schema
+    oben). Fällt bei fehlendem API-Key oder Fehler auf 'unclear' zurück (sicherer Default —
+    führt NIE zu einer automatischen Konvertierung)."""
+    if not HAS_ANTHROPIC or not ANTHROPIC_API_KEY or not text.strip():
+        return "unclear"
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=CLASSIFY_MODEL,
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Wir haben eine Kaltakquise-Mail zu einem Sicherheitscheck versendet. "
+                    "Ordne die folgende Antwort ein, indem du classify_reply aufrufst:\n\n"
+                    f"{text[:1500]}"
+                ),
+            }],
+            tools=[_CLASSIFY_TOOL],
+            tool_choice={"type": "tool", "name": "classify_reply"},
+        )
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "classify_reply":
+                return block.input.get("intent", "unclear")
+    except Exception:
+        pass
+    return "unclear"
 
 
 class InboxNotConfigured(Exception):
@@ -105,6 +166,15 @@ def _decode(value: str) -> str:
     return "".join(out)
 
 
+def _html_to_text(html: str) -> str:
+    """Wandelt HTML in Text um — entfernt zuerst <style>/<script>-INHALT (nicht nur die
+    Tags!), sonst landet z.B. CSS-Quellcode als 'Text' im reply_snippet/Klassifikation
+    (live beobachtet: eine HTML-Mail ohne text/plain-Teil lieferte reinen CSS-Code)."""
+    html = re.sub(r"<(style|script)[^>]*>.*?</\1>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", html)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _extract_body(msg) -> str:
     if msg.is_multipart():
         for part in msg.walk():
@@ -117,12 +187,13 @@ def _extract_body(msg) -> str:
             if part.get_content_type() == "text/html":
                 try:
                     html = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="replace")
-                    return re.sub(r"<[^>]+>", " ", html)
+                    return _html_to_text(html)
                 except Exception:
                     continue
         return ""
     try:
-        return msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", errors="replace")
+        raw = msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", errors="replace")
+        return _html_to_text(raw) if msg.get_content_type() == "text/html" else raw
     except Exception:
         return ""
 
@@ -197,30 +268,35 @@ def check_inbox(lookback_days: int = 2) -> dict:
                 if addr_l in by_email:
                     new_text = _strip_quoted(body)
                     snippet = " ".join(new_text.split())[:300]
-                    is_opt_out = any(h in new_text.lower() or h in subject for h in OPT_OUT_HINTS)
-                    is_autoreply = (
-                        any(h in auto_submitted_header for h in AUTOREPLY_HEADER_HINTS)
-                        or any(h in new_text.lower() or h in subject for h in AUTOREPLY_BODY_HINTS)
-                    )
+                    # RFC-3834-Header ist ein eindeutiges, kostenloses Signal — direkt als
+                    # auto_reply werten, ohne dafür einen LLM-Call zu brauchen. Ansonsten
+                    # entscheidet die inhaltliche Klassifikation (Keyword-Listen sind zu
+                    # unzuverlässig, siehe Moduldoku).
+                    if any(h in auto_submitted_header for h in AUTOREPLY_HEADER_HINTS):
+                        intent = "auto_reply"
+                    else:
+                        intent = classify_reply_intent(f"Betreff: {subject}\n\n{new_text}")
                     for lead in by_email[addr_l]:
                         db_execute(
                             "UPDATE leads SET replied_at=?,reply_snippet=? WHERE id=? AND replied_at IS NULL",
                             (datetime.now().isoformat(), snippet, lead["id"]),
                         )
                         result["replies_found"] += 1
-                        if is_opt_out:
+                        result.setdefault("by_intent", {})
+                        result["by_intent"][intent] = result["by_intent"].get(intent, 0) + 1
+                        if intent == "opt_out":
                             db_execute("UPDATE leads SET status='opted_out' WHERE id=?", (lead["id"],))
                             result["opted_out"] += 1
-                        elif is_autoreply:
-                            # Kein Mensch hat das gelesen — NICHT konvertieren, nur zur
-                            # manuellen Sichtung markiert lassen (bleibt status='emailed').
-                            result["autoreplies_found"] = result.get("autoreplies_found", 0) + 1
-                        else:
+                        elif intent == "interested":
                             try:
                                 if _auto_convert_lead(lead["id"], snippet):
                                     result["converted"] += 1
                             except Exception as e:
                                 result["conversion_errors"] = result.get("conversion_errors", 0) + 1
+                        else:
+                            # not_interested / auto_reply / unclear — NICHT konvertieren,
+                            # bleibt status='emailed' mit reply_snippet zur manuellen Sichtung.
+                            result["autoreplies_found"] = result.get("autoreplies_found", 0) + 1
                     del by_email[addr_l]
 
             if not by_email:
