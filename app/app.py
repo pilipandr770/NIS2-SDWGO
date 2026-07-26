@@ -369,7 +369,9 @@ def new_angebot():
 
         # Генеруємо Angebot PDF
         angebot_num = f"ANG-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        pdf_name    = f"Angebot_{client['company'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
+        pdf_name    = secure_filename(
+            f"Angebot_{client['company'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
+        )
         pdf_path    = os.path.join(REPORTS_DIR, pdf_name)
         actual_path = generate_angebot_pdf(pdf_path, client, target, amount, scope, angebot_num)
         pdf_name    = os.path.basename(actual_path)
@@ -510,7 +512,12 @@ def generate_report(oid):
     logs     = db_query("SELECT * FROM audit_logs WHERE order_id=? ORDER BY created_at ASC", (oid,))
     live     = fetch_live_check(order["target"])
 
-    pdf_name = f"Bericht_{order['company'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    # secure_filename() hier UND beim Download anwenden — sonst passt z.B. bei
+    # Firmennamen mit Klammern/Sonderzeichen der gespeicherte Dateiname nicht mehr
+    # zu dem, was die /download-Route nach der Bereinigung sucht (404).
+    pdf_name = secure_filename(
+        f"Bericht_{order['company'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    )
     pdf_path = os.path.join(REPORTS_DIR, pdf_name)
     actual_path = generate_report_pdf(pdf_path, order, findings, live, tasks, logs)
     pdf_name = os.path.basename(actual_path)
