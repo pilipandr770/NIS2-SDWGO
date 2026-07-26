@@ -108,6 +108,18 @@ def _is_english(text: str) -> bool:
     return len(_EN_RE.findall(text or "")) > 2
 
 
+_CONTINUATION_RE = re.compile(
+    r'\s*[\(\[]\s*(fortsetzung|continued?|teil\s*\d+|part\s*\d+)\b.*?[\)\]]\s*$',
+    re.IGNORECASE,
+)
+
+def _normalize_finding_title(title: str) -> str:
+    """Strip continuation markers like '(Fortsetzung)' so a truncated finding
+    that gets re-submitted under a slightly different title is still caught
+    as a duplicate of the original."""
+    return _CONTINUATION_RE.sub("", (title or "").strip()).strip().lower()
+
+
 def _run_cmd(cmd: list, timeout: int = 90) -> str:
     """Run a command; return stdout+stderr, cap at 5000 chars."""
     exe = shutil.which(cmd[0]) if cmd else None
@@ -665,6 +677,7 @@ def run_audit_agent(order_id: int, target: str, company: str):
     api_errors = 0
     last_tool_run = ""          # tracks the most-recently executed tool for finding attribution
     tools_used    = {}          # {tool_name: {"start": iso, "end": iso, "findings": count}}
+    added_finding_titles = set()  # normalized titles already saved — blocks truncated/duplicate re-submits
     usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
 
     for iteration in range(MAX_ITERATIONS):
@@ -673,7 +686,7 @@ def run_audit_agent(order_id: int, target: str, company: str):
         try:
             response = client.messages.create(
                 model=MODEL,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=SYSTEM_PROMPT.format(max_iter=MAX_ITERATIONS),
                 tools=TOOLS_SPEC,
                 messages=_compress_messages(messages),
@@ -745,8 +758,11 @@ def run_audit_agent(order_id: int, target: str, company: str):
 
                 elif tool_name == "add_finding":
                     finding_tool = tool_input.get("tool", "") or last_tool_run
+                    title = tool_input.get("title", "")
                     desc = tool_input.get("description", "")
                     rec  = tool_input.get("recommendation", "")
+                    norm_title = _normalize_finding_title(title)
+
                     if _is_english(desc) or _is_english(rec):
                         tool_results.append({
                             "type": "tool_result",
@@ -758,8 +774,39 @@ def run_audit_agent(order_id: int, target: str, company: str):
                             ),
                         })
                         _log(order_id, "WARN",
-                             f"Englisches Finding abgelehnt: {tool_input.get('title','')[:60]}")
+                             f"Englisches Finding abgelehnt: {title[:60]}")
+                    elif len(rec.strip()) < 10:
+                        # Meist Folge einer bei max_tokens abgeschnittenen Tool-Antwort:
+                        # description kam noch durch, recommendation fehlt/ist ein Stub.
+                        # Lieber ablehnen und den Agenten zur vollständigen Neuerstellung
+                        # zwingen, als ein halbfertiges Finding im Kundenbericht landen zu lassen.
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": (
+                                "FEHLER: Feld 'recommendation' fehlt oder ist zu kurz. "
+                                "Erstelle dieses Finding NEU in EINEM Tool-Call mit vollständiger, "
+                                "konkreter Empfehlung (recommendation). Keine Platzhalter, keine "
+                                "Aufteilung in mehrere Findings."
+                            ),
+                        })
+                        _log(order_id, "WARN",
+                             f"Finding ohne Empfehlung abgelehnt: {title[:60]}")
+                    elif norm_title and norm_title in added_finding_titles:
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": (
+                                "FEHLER: Ein Finding mit diesem (oder sehr ähnlichem) Titel wurde "
+                                "bereits gespeichert. Kein Duplikat/Fortsetzung anlegen — falls das "
+                                "vorherige Finding unvollständig war, wurde es bereits abgelehnt und "
+                                "muss stattdessen unter demselben Titel VOLLSTÄNDIG neu erstellt werden."
+                            ),
+                        })
+                        _log(order_id, "WARN",
+                             f"Doppeltes Finding abgelehnt: {title[:60]}")
                     else:
+                        added_finding_titles.add(norm_title)
                         _add_finding(
                             order_id,
                             title          = tool_input.get("title",""),
