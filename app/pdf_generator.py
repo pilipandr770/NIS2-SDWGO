@@ -53,7 +53,7 @@ PRINT_CSS = """
   * { -webkit-margin-before: 0; }
 }
 * { box-sizing:border-box; margin:0; padding:0; }
-body { font-family:Arial,Helvetica,sans-serif; color:#1a1a2e; font-size:11px; line-height:1.6; }
+body { font-family:Arial,Helvetica,"DejaVu Sans",sans-serif; color:#1a1a2e; font-size:11px; line-height:1.6; }
 .print-bar { background:#1a1a2e; color:#fff; padding:10px 24px; display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; z-index:99; }
 .print-bar h2 { font-size:13px; font-weight:600; }
 .btn-print { background:#e94560; color:#fff; border:none; padding:8px 20px; border-radius:6px; font-size:13px; font-weight:700; cursor:pointer; }
@@ -1007,7 +1007,7 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
   <div class="cover-box"><div class="lbl">PRÜFUNGSZIEL</div><div class="val">{esc(target)}</div></div>
   <div class="cover-box"><div class="lbl">KUNDE</div><div class="val">{esc(company)}</div></div>
   <div class="cover-box"><div class="lbl">DATUM</div><div class="val">{now}</div></div>
-  <div class="cover-meta">Prüfer: {esc(FULL_NAME)}<br>{esc(ADDRESS)}<br>{esc(EMAIL)} · {esc(PHONE)}<br>{esc(UST_ID)}<br>Gesamtbefunde: <b>{total}</b> &nbsp;·&nbsp; Scan: <b>{len(tools_used) or "—"}/8 Tools</b> &nbsp;·&nbsp; Compliance: <b>{tasks_pct}% ({tasks_verified}/{tasks_total})</b></div>
+  <div class="cover-meta">Prüfer: {esc(FULL_NAME)}<br>{esc(ADDRESS)}<br>{esc(EMAIL)} · {esc(PHONE)}<br>{esc(UST_ID)}<br>Gesamtbefunde: <b>{total}</b> &nbsp;·&nbsp; Scan: <b>{len(tools_used) or "—"} Tools</b> &nbsp;·&nbsp; Compliance: <b>{tasks_pct}% ({tasks_verified}/{tasks_total})</b></div>
   <div style="margin-top:14px">
     <span class="cbadge">✓ NIS2 / §30 BSIG</span>
     <span class="cbadge">✓ DSGVO Art. 32</span>
@@ -1024,7 +1024,7 @@ def generate_report_pdf(out_path, order, findings, live, tasks=None, logs=None):
 <tr><td>Prüfungsziel</td><td>{esc(target)}</td></tr>
 <tr><td>Prüfer</td><td>{esc(FULL_NAME)} · {esc(WEBSITE)}</td></tr>
 <tr><td>Prüfungsdatum</td><td>{now}</td></tr>
-<tr><td>Scan-Status</td><td><b class="ok">✓ {len(tools_used) if tools_used else "—"} von 8 Tools durchgeführt</b></td></tr>
+<tr><td>Scan-Status</td><td><b class="ok">✓ {len(tools_used) if tools_used else "—"} Tools durchgeführt</b></td></tr>
 <tr><td>Compliance-Checkliste</td><td><b style="color:{"#16a34a" if tasks_pct==100 else "#d97706"}">{tasks_pct}% ({tasks_verified}/{tasks_total} Aufgaben ohne kritische Befunde)</b></td></tr>
 <tr><td>Offene Befunde</td><td><b style="color:{"#dc2626" if (counts["critical"]+counts["high"]) > 0 else ("#d97706" if counts["medium"] > 0 else "#16a34a")}">{counts["critical"]+counts["high"]+counts["medium"]+counts["low"]} Befunde ({counts["critical"]} kritisch / {counts["high"]} hoch / {counts["medium"]} mittel / {counts["low"]} niedrig) · {counts["info"]} informativ</b></td></tr>
 </table>

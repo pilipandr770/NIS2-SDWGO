@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bsdmainutils procps \
     libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 \
     libcairo2 libffi8 \
-    fonts-liberation fontconfig \
+    fonts-liberation fonts-dejavu-core fontconfig \
     && rm -rf /var/lib/apt/lists/*
 
 # Install nikto from source (not in Debian Trixie repos)

@@ -127,6 +127,35 @@ def _extract_services(shodan_data: dict) -> list:
     return services
 
 
+def _cve_relevant(product: str, desc: str) -> bool:
+    """Plausibilitäts-Filter gegen zu freie Treffer der NVD/CIRCL-Freitextsuche.
+
+    Live-Vorfall (echter Kundenbericht): Die Suche nach "Remote Desktop Protocol"
+    lieferte u.a. CVEs zu Avaya-SIP-Telefonen und ISS RealSecure zurück, die mit
+    dem tatsächlich gefundenen Dienst nichts zu tun haben — NVDs keywordSearch und
+    CIRCLs Vendor/Produkt-Rätselei sind reine Freitextsuchen ohne Garantie, dass
+    das Produkt in der Beschreibung überhaupt vorkommt.
+
+    Einzelwort-Abgleich reicht NICHT: Wörter wie "remote" oder "protocol" kommen in
+    fast jeder CVE-Beschreibung vor (z.B. "allows remote attackers"), unabhängig vom
+    Produkt — das ließ im Praxistest sowohl die Avaya- als auch die ISS-CVE fälschlich
+    durch. Deshalb Abgleich über Wortfolgen (Bigramme) der Produktbezeichnung: die
+    Beschreibung muss mindestens ein Wortpaar aus dem Produktnamen als tatsächliche
+    Wortfolge enthalten (nicht nur die Einzelwörter irgendwo verteilt)."""
+    if not desc:
+        return False
+    product_l = product.lower().strip()
+    desc_l = desc.lower()
+    if not product_l:
+        return True
+    if product_l in desc_l:
+        return True
+    words = product_l.split()
+    if len(words) >= 2:
+        return any(f"{words[i]} {words[i + 1]}" in desc_l for i in range(len(words) - 1))
+    return words[0] in desc_l
+
+
 def match_cve_nvd(product: str, version: str) -> list:
     """CVE-Lookup über NVD API 2.0 (offiziell, reiner Datenbank-Read)."""
     if not product:
@@ -153,6 +182,8 @@ def match_cve_nvd(product: str, version: str) -> list:
                     break
             descs = cve.get("descriptions", [])
             desc_text = next((d["value"] for d in descs if d.get("lang") == "en"), "")
+            if not _cve_relevant(product, desc_text):
+                continue
             out.append({"id": cve_id, "score": score, "severity": severity, "desc": desc_text})
         return out
     except Exception:
@@ -174,11 +205,14 @@ def match_cve_circl(product: str, version: str) -> list:
         results = data.get("data", []) if isinstance(data, dict) else data
         out = []
         for item in results[:10]:
+            desc = item.get("summary", "")
+            if not _cve_relevant(product, desc):
+                continue
             out.append({
                 "id": item.get("id"),
                 "score": item.get("cvss", ""),
                 "severity": "medium",
-                "desc": item.get("summary", ""),
+                "desc": desc,
             })
         return out
     except Exception:
