@@ -338,20 +338,26 @@ def _cross_validate_findings(findings: list, live: dict) -> list:
             validated.append(f)
             continue
 
-        # Header IS present in live-check — scanner reported false positive
+        # Header IS present in live-check — scanner's "fehlt"-Behauptung war falsch
         f = dict(f)  # mutable copy
-        note = (f"[Live-Check: Header '{targeted_header}' ist konfiguriert "
-                f"(Wert: {live_status['value'][:60]}). "
-                "Befund möglicherweise Scan-Artefakt durch CDN/Reverse-Proxy (z. B. Cloudflare). "
-                "Live-Check-Ergebnisse in Abschnitt 3 sind maßgeblich.]")
 
         if live_status["good"]:
-            # Header is present AND correct → downgrade to info
+            # Header present AND correctly configured → Scanner-Befund war ein Fehlalarm
+            note = (f"[Live-Check: Header '{targeted_header}' ist korrekt konfiguriert "
+                    f"(Wert: {live_status['value'][:60]}). "
+                    "Der urspruengliche Befund war ein Fehlalarm des Scan-Tools, moeglich durch "
+                    "CDN/Reverse-Proxy (z. B. Cloudflare). Live-Check-Ergebnisse in Abschnitt 3 "
+                    "sind massgeblich.]")
             f["severity"] = "info"
             f["cvss"]     = ""
             f["description"] = f.get("description", "") + " " + note
         else:
-            # Header present but weak (e.g. CSP with unsafe-inline) → keep severity, fix title
+            # Header present but weak (e.g. CSP with unsafe-inline) — echte Schwachstelle,
+            # KEIN Scan-Artefakt: Severity bleibt, nur der Titel wird von "fehlt" korrigiert.
+            note = (f"[Live-Check: Header '{targeted_header}' ist vorhanden, aber schwach "
+                    f"konfiguriert (Wert: {live_status['value'][:60]}). Dies ist keine "
+                    "Fehlmeldung des Scanners, sondern eine bestaetigte Schwachstelle — "
+                    "die Bewertung in Abschnitt 3 und diesem Befund stimmen ueberein.]")
             f["description"] = f.get("description", "") + " " + note
             title = f.get("title", "")
             for bad_phrase in ["fehlt vollständig", "fehlt", "nicht konfiguriert", "nicht gesetzt"]:
